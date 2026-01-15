@@ -71,7 +71,7 @@ CACHE_PATH = "/home/deck/scripts/game_cache.json"
 os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
 
 # ===========================
-# Helpers & Smart Lookup
+# s & Smart Lookup
 # ===========================
 
 def print_log(message):
@@ -381,13 +381,6 @@ mqtt:
       payload_available: "online"
       payload_not_available: "offline"
       expire_after: 90 # 1,5 minutes without update = unavailable       
-
-    - name: "Steam Deck Game Library Storage"
-      unique_id: steam_deck_game_library_storage
-      state_topic: "steamdeck/library_storage"
-      value_template: "{{ value_json.total_games | default(0) }}"
-      json_attributes_topic: "steamdeck/library_storage"
-      json_attributes_template: "{{ value_json.games | to_json }}"
 ```
 
 shell_command:
