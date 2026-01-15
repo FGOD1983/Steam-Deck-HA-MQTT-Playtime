@@ -1,0 +1,3 @@
+shell_command:
+  # Steam Deck
+  update_steam_library: "/bin/bash -c 'echo \"{{ json_data }}\" | base64 -d > /config/www/steam_library.json'"

@@ -1,0 +1,5 @@
+homeassistant:
+  allowlist_external_dirs:
+    - "/config/www"
+    - "/config/www/"
+

@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic Steam Deck MQTT sensor update
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/deck/mqtt-env/bin/python /home/deck/scripts/steamdeck_mqtt_sensors.py
+StandardOutput=journal
+StandardError=journal
