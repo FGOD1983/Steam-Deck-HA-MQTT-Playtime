@@ -1,0 +1,10 @@
+[Unit]
+Description=Set Steam Deck MQTT sensors offline before sleep
+Before=sleep.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/deck/mqtt-env/bin/python /home/deck/scripts/steamdeck_mqtt_sensors.py --offline
+StandardOutput=journal
+StandardError=journal

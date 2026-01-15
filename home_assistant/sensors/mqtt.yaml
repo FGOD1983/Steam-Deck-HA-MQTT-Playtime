@@ -1,0 +1,59 @@
+mqtt:
+  sensor:
+# Steam Deck
+    - name: "Steam Deck Battery"
+      unique_id: 'steam_deck_battery_percentage'
+      state_topic: "steamdeck/battery"
+      unit_of_measurement: "%"
+      icon: "mdi:battery"
+      device_class: battery 
+      state_class: measurement
+      availability_topic: "steamdeck/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+      expire_after: 90 # 1,5 minutes without update = unavailable
+      
+    - name: "Steam Deck Charging"
+      unique_id: 'steam_deck_charging'
+      state_topic: "steamdeck/charging"
+      icon: "mdi:battery-charging"
+      availability_topic: "steamdeck/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+      expire_after: 90  # 1,5 minutes without update = unavailable
+    
+    - name: "Steam Deck Mode"
+      unique_id: 'steam_deck_mode'
+      state_topic: "steamdeck/mode"
+      icon: "mdi:monitor"
+      availability_topic: "steamdeck/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+      expire_after: 90  # 1,5 minutes without update = unavailable
+    
+    - name: "Steam Deck Network"
+      unique_id: 'steam_deck_network'
+      state_topic: "steamdeck/network"
+      icon: "mdi:wifi"
+      availability_topic: "steamdeck/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+      expire_after: 90  # 1,5 minutes without update = unavailable
+  
+    - name: "Steam Deck Active Game"
+      unique_id: 'steam_deck_active_game'
+      state_topic: "steamdeck/game"
+      icon: "mdi:gamepad-variant"
+      availability_topic: "steamdeck/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+      expire_after: 90  # 1,5 minutes without update = unavailable
+
+    - name: "Steam Deck Dock Status"
+      state_topic: "steamdeck/docked"
+      unique_id: "steamdeck_docked_status"
+      icon: "mdi:dock-bottom"
+      availability_topic: "steamdeck/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+      expire_after: 90 # 1,5 minutes without update = unavailable       

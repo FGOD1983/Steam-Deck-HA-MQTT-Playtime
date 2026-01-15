@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Steam Deck MQTT sensor update every 10 seconds 
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=20s
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

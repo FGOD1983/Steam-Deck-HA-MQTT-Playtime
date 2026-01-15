@@ -1,0 +1,180 @@
+type: vertical-stack
+cards:
+  - type: conditional
+    conditions:
+      - condition: screen
+        media_query: (pointer:coarse)
+    card:
+      type: vertical-stack
+      cards:
+        - type: picture-elements
+          image: /local/steamdeck.png
+          elements:
+            - type: state-icon
+              entity: sensor.steam_deck_network_display
+              style:
+                top: 12%
+                left: 34%
+                transform: translateX(-50%)
+            - type: state-label
+              entity: sensor.steam_deck_network_display
+              style:
+                top: 24%
+                left: 34%
+                transform: translateX(-50%)
+                text-align: center
+                display: inline-block
+                min-width: 0
+            - type: state-icon
+              entity: sensor.steam_deck_battery_display
+              style:
+                top: 12%
+                left: 67%
+                transform: translateX(-50%)
+              tap_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              hold_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+            - type: state-label
+              entity: sensor.steam_deck_battery_display
+              style:
+                top: 24%
+                left: 67%
+                transform: translateX(-50%)
+                text-align: center
+                display: inline-block
+                min-width: 0
+              tap_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              hold_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+            - type: state-icon
+              entity: sensor.steam_deck_dock_status_display
+              style:
+                top: 55%
+                left: 34%
+                transform: translateX(-50%)
+            - type: state-icon
+              entity: sensor.steam_deck_charging_display
+              style:
+                top: 54%
+                left: 67%
+                transform: translateX(-50%)
+            - type: state-icon
+              entity: sensor.steam_deck_active_game_display
+              style:
+                top: 45%
+                left: 50%
+                transform: translate(-50%, -100%)
+            - type: state-label
+              entity: sensor.steam_deck_active_game_display
+              style:
+                top: 37%
+                left: 50%
+                transform: translate(-50%, -0%)
+                text-align: center
+                color: white
+                display: inline-block
+                min-width: 0
+                white-space: normal
+                width: 180px
+              card_mod:
+                style: |
+                  div {
+                    white-space: unset !important;
+                    line-height: 1.1;
+                    padding-top: 0.3em;
+                      }
+  - type: conditional
+    conditions:
+      - condition: screen
+        media_query: (pointer:fine)
+    card:
+      type: vertical-stack
+      cards:
+        - type: picture-elements
+          image: /local/steamdeck.png
+          elements:
+            - type: state-icon
+              entity: sensor.steam_deck_network_display
+              style:
+                top: 12%
+                left: 34%
+                transform: translateX(-50%)
+            - type: state-label
+              entity: sensor.steam_deck_network_display
+              style:
+                top: 24%
+                left: 34%
+                transform: translateX(-50%)
+                text-align: center
+                display: inline-block
+                min-width: 0
+            - type: state-icon
+              entity: sensor.steam_deck_battery_display
+              style:
+                top: 12%
+                left: 67%
+                transform: translateX(-50%)
+              tap_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              hold_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+            - type: state-label
+              entity: sensor.steam_deck_battery_display
+              style:
+                top: 24%
+                left: 67%
+                transform: translateX(-50%)
+                text-align: center
+                display: inline-block
+                min-width: 0
+              tap_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              hold_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+            - type: state-icon
+              entity: sensor.steam_deck_dock_status_display
+              style:
+                top: 55%
+                left: 34%
+                transform: translateX(-50%)
+            - type: state-icon
+              entity: sensor.steam_deck_charging_display
+              style:
+                top: 55%
+                left: 67%
+                transform: translateX(-50%)
+            - type: state-icon
+              entity: sensor.steam_deck_active_game_display
+              style:
+                top: 45%
+                left: 50%
+                transform: translate(-50%, -100%)
+            - type: state-label
+              entity: sensor.steam_deck_active_game_display
+              style:
+                top: 39%
+                left: 50%
+                transform: translate(-50%, -0%)
+                text-align: center
+                color: white
+                display: inline-block
+                min-width: 0
+                white-space: normal
+                width: 180px
+              card_mod:
+                style: |
+                  div {
+                    white-space: unset !important;
+                    line-height: 1.1;
+                    padding-top: 0.3em;
+                      }
