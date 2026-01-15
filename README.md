@@ -1,4 +1,10 @@
 # Steam-Deck-HA-MQTT-Playtime
+
+# Support
+Hey if you like what I did with this, :beers: or a :pizza: would be nice :D
+
+[![coffee](https://www.buymeacoffee.com/assets/img/custom_images/black_img.png)](https://buymeacoffee.com/fgod)
+
 ## Steam Deck Game Tracker for Home Assistant
 
 This project provides a robust way to track playtime for your entire Steam Deck library within Home Assistant. It is specifically designed to work with:
