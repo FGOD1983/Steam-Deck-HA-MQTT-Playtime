@@ -44,7 +44,7 @@ mkdir -p ~/scripts
 
 # Set up a Python Virtual Environment to keep the system clean
 python -m venv ~/mqtt-env
-~/mqtt-env/bin/pip install paho-mqtt requests
+~/mqtt-env/bin/pip install paho-mqtt requests psutil
 ```
 2. Create the Script
 
