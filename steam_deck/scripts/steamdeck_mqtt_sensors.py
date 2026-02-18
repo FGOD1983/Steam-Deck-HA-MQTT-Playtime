@@ -34,13 +34,11 @@ def print_log(message):
     print(f"{timestamp} [DEBUG] {message}")
 
 def write_trace(game_name, cpu, status="Detection"):
-    """Logs scans for troubleshooting (e.g., the .overlay or EA App bugs)."""
     try:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(TRACE_LOG_PATH, "a") as f:
             f.write(f"{timestamp} | {status} | Found: {game_name} | CPU: {cpu}%\n")
         
-        # Keep log file limited to last 100 lines
         if os.path.exists(TRACE_LOG_PATH):
             with open(TRACE_LOG_PATH, "r") as f:
                 lines = f.readlines()
@@ -56,10 +54,9 @@ def get_output(cmd):
         return ""
 
 def lookup_steam_name(search_term):
-    """Searches Steam for the most accurate match."""
     try:
         url_term = quote(search_term)
-        search_url = f"https://store.steampowered.com/api/storesearch/?term={url_term}&l=english&cc=US"
+        search_url = f"https://store.steampowered.com/api/storesearch/?term={url_term}&l=dutch&cc=NL"
         response = requests.get(search_url, timeout=5)
         data = response.json()
         if data.get('total', 0) > 0:
@@ -73,9 +70,7 @@ def lookup_steam_name(search_term):
     return None
 
 def resolve_game_title(raw_name):
-    """Translates technical folder names to pretty titles with Atomic Writing."""
     cache_data = {}
-    
     if os.path.exists(CACHE_PATH):
         try:
             with open(CACHE_PATH, 'r') as f:
@@ -83,7 +78,7 @@ def resolve_game_title(raw_name):
                 if content:
                     cache_data = json.loads(content)
         except Exception as e:
-            print_log(f"Cache error: {e}. Trying backup...")
+            print_log(f"Cache error: {e}")
             if os.path.exists(CACHE_PATH + ".bak"):
                 try:
                     with open(CACHE_PATH + ".bak", 'r') as f:
@@ -93,7 +88,7 @@ def resolve_game_title(raw_name):
     if raw_name in cache_data:
         return cache_data[raw_name]
 
-    print_log(f"Resolving new title for: {raw_name}")
+    print_log(f"Nieuwe titel opzoeken voor: {raw_name}")
     clean_name = re.sub(r'([a-z])([A-Z])', r'\1 \2', raw_name)
     clean_name = clean_name.replace("_", " ").replace("-", " ")
     search_term = " ".join(clean_name.split()).strip()
@@ -112,9 +107,8 @@ def resolve_game_title(raw_name):
         with open(tmp_path, 'w') as f:
             json.dump(cache_data, f, indent=4)
         os.replace(tmp_path, CACHE_PATH)
-        print_log(f"Cache updated: {raw_name} -> {final_name}")
     except Exception as e:
-        print_log(f"Error saving cache: {e}")
+        print_log(f"Fout bij opslaan cache: {e}")
 
     return final_name
 
@@ -125,20 +119,23 @@ def resolve_game_title(raw_name):
 def detect_game():
     possible_matches = []
     
-    # List of keywords to ignore (launchers, system processes, overlays)
+    # Ignore list uitgebreid met Steam setup tools en launchers
     ignore_list = [
         "steam.exe", "services.exe", "explorer.exe", "winedevice.exe",
         "system32", "proton", "experimental", "pressure-vessel",
         "command", "epicgameslauncher", "monitoring", "bmlauncher",
         "launcher", "setup.exe", "install.exe", "reaper", "steamwebhelper",
         "overlay", "social", "webhelper", "crashreporter", "eosoverlay",
-        "ea desktop", "eadesktop", "destager", "origin", "uplay"
+        "ea desktop", "eadesktop", "destager", "origin", "uplay",
+        "iscriptevaluator", "legacycompat", "vivox", "easyanticheat"
     ]
     
+    # Technische mappen die we skippen om de echte gamemap te vinden
     tech_folders = [
         "binaries", "win64", "win32", "win32s", "shipping", "pfx", 
         "drive_c", "core", "common", "steamapps", "dist", "scripts", "bin",
-        "ea desktop", "origin", "launcher"
+        "ea desktop", "origin", "launcher", "system", "oakgame", "engine",
+        "bundled", "plugins"
     ]
 
     for proc in psutil.process_iter(['cmdline', 'cpu_percent', 'create_time']):
@@ -149,7 +146,7 @@ def detect_game():
             full_cmd = " ".join(cmdline)
             full_cmd_lower = full_cmd.lower()
 
-            # Skip immediately if any ignore keyword is found
+            # Skip processen in de ignore_list
             if any(x in full_cmd_lower for x in ignore_list):
                 continue
 
@@ -168,20 +165,23 @@ def detect_game():
                 possible_matches.append({'title': clean_rom, 'cpu': 100, 'time': proc.info['create_time']})
                 continue
 
-            # 3. EXE & Path Check
-            if (".exe" in full_cmd_lower or "steamapps/common" in full_cmd_lower):
-                path_match = re.search(r'([A-Za-z]:[/\\]|/)(?:[\w\-. ]+[/\\])*[\w\-. ]+\.(?:exe|sh)', full_cmd, re.IGNORECASE)
+            # 3. EXE & Path Check (Steam, Linux Native, Heroic, etc.)
+            is_steam_game = "steamapps/common" in full_cmd_lower or ".exe" in full_cmd_lower
+            is_linux_native = "ut2004" in full_cmd_lower or "/games/" in full_cmd_lower or "/applications/" in full_cmd_lower
+
+            if is_steam_game or is_linux_native:
+                path_match = re.search(r'([A-Za-z]:[/\\]|/)(?:[\w\-. ]+[/\\])*[\w\-. ]+(?:\.exe|\.sh)?', full_cmd, re.IGNORECASE)
                 if path_match:
                     full_path = path_match.group(0).replace('\\', '/')
                     parts = [p for p in full_path.split('/') if p]
                     
                     game_folder = None
+                    # Loop achterwaarts door het pad om de gamemap te vinden
                     for i in range(len(parts)-2, -1, -1):
                         folder = parts[i]
                         f_lower = folder.lower()
-                        # Filtering: Skip tech, system, hidden folders, and launcher terms
                         if (f_lower not in tech_folders and 
-                            f_lower not in ["windows", "games", "deck", "home", "users"] and 
+                            f_lower not in ["windows", "games", "deck", "home", "users", "usr", "bin", "local", "share"] and 
                             not folder.startswith('.') and 
                             len(folder) > 2 and
                             "launcher" not in f_lower and
@@ -189,6 +189,10 @@ def detect_game():
                             game_folder = folder
                             break
                     
+                    # Fallback voor specifieke executables
+                    if not game_folder and "ut2004" in full_cmd_lower:
+                        game_folder = "UT2004"
+
                     if game_folder:
                         possible_matches.append({
                             'title': game_folder,
@@ -199,16 +203,11 @@ def detect_game():
             continue
 
     if possible_matches:
-        # Sort by CPU usage first, then creation time (most active/newest first)
+        # Sorteer op CPU belasting (belangrijkst) en daarna op hoe recent het proces is
         best_match = sorted(possible_matches, key=lambda x: (x['cpu'], x['time']), reverse=True)[0]
-        
-        # Log detection for troubleshooting
         write_trace(best_match['title'], best_match['cpu'])
-
-        # Final check against folders starting with a dot
         if best_match['title'].startswith('.'):
             return "No game opened"
-
         return resolve_game_title(best_match['title'])
 
     return "No game opened"
@@ -226,7 +225,7 @@ def run_update(offline_mode=False):
     detected_game = detect_game()
 
     if not is_network_online():
-        print_log("Network offline. Skipping update.")
+        print_log("Netwerk offline. Overslaan.")
         return
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -242,12 +241,10 @@ def run_update(offline_mode=False):
             client.publish(f"{BASE_TOPIC}/availability", "offline", retain=True)
             write_trace("OFFLINE SIGNAL", 0, "Status")
         else:
-            # Gather system information
             battery = get_output("upower -i /org/freedesktop/UPower/devices/battery_BAT1 | grep percentage | awk '{print $2}' | tr -d '%'") or "0"
             charging = get_output("upower -i /org/freedesktop/UPower/devices/battery_BAT1 | grep state | awk '{print $2}'").capitalize() or "Unknown"
             mode = "Game Mode" if get_output("ps -A | grep gamescope") else "Desktop Mode"
 
-            # Publish topics
             client.publish(f"{BASE_TOPIC}/battery", battery, retain=True)
             client.publish(f"{BASE_TOPIC}/charging", charging, retain=True)
             client.publish(f"{BASE_TOPIC}/mode", mode, retain=True)
@@ -255,12 +252,11 @@ def run_update(offline_mode=False):
             client.publish(f"{BASE_TOPIC}/availability", "online", retain=True)
 
         time.sleep(1)
-        client.loop_start() # Ensure loop runs
         client.loop_stop()
         client.disconnect()
-        print_log(f"Update successful: {detected_game}")
+        print_log(f"Update succesvol: {detected_game}")
     except Exception as e:
-        print_log(f"MQTT Error: {e}")
+        print_log(f"MQTT Fout: {e}")
 
 if __name__ == '__main__':
     run_update(offline_mode='--offline' in sys.argv)
