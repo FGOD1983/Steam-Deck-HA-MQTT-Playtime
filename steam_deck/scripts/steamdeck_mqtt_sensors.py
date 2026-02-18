@@ -119,7 +119,6 @@ def resolve_game_title(raw_name):
 def detect_game():
     possible_matches = []
     
-    # Ignore list uitgebreid met Steam setup tools en launchers
     ignore_list = [
         "steam.exe", "services.exe", "explorer.exe", "winedevice.exe",
         "system32", "proton", "experimental", "pressure-vessel",
@@ -130,7 +129,6 @@ def detect_game():
         "iscriptevaluator", "legacycompat", "vivox", "easyanticheat"
     ]
     
-    # Technische mappen die we skippen om de echte gamemap te vinden
     tech_folders = [
         "binaries", "win64", "win32", "win32s", "shipping", "pfx", 
         "drive_c", "core", "common", "steamapps", "dist", "scripts", "bin",
@@ -146,7 +144,6 @@ def detect_game():
             full_cmd = " ".join(cmdline)
             full_cmd_lower = full_cmd.lower()
 
-            # Skip processen in de ignore_list
             if any(x in full_cmd_lower for x in ignore_list):
                 continue
 
@@ -165,33 +162,41 @@ def detect_game():
                 possible_matches.append({'title': clean_rom, 'cpu': 100, 'time': proc.info['create_time']})
                 continue
 
-            # 3. EXE & Path Check (Steam, Linux Native, Heroic, etc.)
-            is_steam_game = "steamapps/common" in full_cmd_lower or ".exe" in full_cmd_lower
-            is_linux_native = "ut2004" in full_cmd_lower or "/games/" in full_cmd_lower or "/applications/" in full_cmd_lower
+            # 3. EXE & Path Check (Splitsing tussen Steam/EXE en Linux Native)
+            is_steam_or_exe = "steamapps/common" in full_cmd_lower or ".exe" in full_cmd_lower
+            
+            # Nu inclusief hoofdletterongevoelige check op /games/ en de Z:\ schijf van Wine/Proton
+            is_linux_native = not is_steam_or_exe and any(p in full_cmd_lower for p in ["/games/", "/applications/", "/run/media/", "z:"])
 
-            if is_steam_game or is_linux_native:
+            if is_steam_or_exe or is_linux_native:
+                # Regex aangepast om ook paden beginnend met Z: te accepteren
                 path_match = re.search(r'([A-Za-z]:[/\\]|/)(?:[\w\-. ]+[/\\])*[\w\-. ]+(?:\.exe|\.sh)?', full_cmd, re.IGNORECASE)
                 if path_match:
                     full_path = path_match.group(0).replace('\\', '/')
                     parts = [p for p in full_path.split('/') if p]
                     
                     game_folder = None
-                    # Loop achterwaarts door het pad om de gamemap te vinden
-                    for i in range(len(parts)-2, -1, -1):
-                        folder = parts[i]
-                        f_lower = folder.lower()
-                        if (f_lower not in tech_folders and 
-                            f_lower not in ["windows", "games", "deck", "home", "users", "usr", "bin", "local", "share"] and 
-                            not folder.startswith('.') and 
-                            len(folder) > 2 and
-                            "launcher" not in f_lower and
-                            "desktop" not in f_lower):
-                            game_folder = folder
-                            break
-                    
-                    # Fallback voor specifieke executables
-                    if not game_folder and "ut2004" in full_cmd_lower:
-                        game_folder = "UT2004"
+
+                    # A. Detectie voor Linux Native zonder extensie (zoals UT2004)
+                    if is_linux_native:
+                        executable_name = parts[-1]
+                        # Als de bestandsnaam (UT2004) niet in de negeerlijst staat, is dat de titel
+                        if executable_name.lower() not in tech_folders and len(executable_name) > 2:
+                            game_folder = executable_name
+
+                    # B. Fallback voor Steam/EXE of als de bestandsnaam hierboven een tech_folder was
+                    if not game_folder:
+                        for i in range(len(parts)-2, -1, -1):
+                            folder = parts[i]
+                            f_lower = folder.lower()
+                            if (f_lower not in tech_folders and 
+                                f_lower not in ["windows", "games", "deck", "home", "users", "usr", "bin", "local", "share"] and 
+                                not folder.startswith('.') and 
+                                len(folder) > 2 and
+                                "launcher" not in f_lower and
+                                "desktop" not in f_lower):
+                                game_folder = folder
+                                break
 
                     if game_folder:
                         possible_matches.append({
@@ -203,7 +208,6 @@ def detect_game():
             continue
 
     if possible_matches:
-        # Sorteer op CPU belasting (belangrijkst) en daarna op hoe recent het proces is
         best_match = sorted(possible_matches, key=lambda x: (x['cpu'], x['time']), reverse=True)[0]
         write_trace(best_match['title'], best_match['cpu'])
         if best_match['title'].startswith('.'):
