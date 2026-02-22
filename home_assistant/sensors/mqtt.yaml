@@ -38,7 +38,7 @@
       payload_available: "online"
       payload_not_available: "offline"
       expire_after: 90  # 1,5 minutes without update = unavailable
-  
+    
     - name: "Steam Deck Active Game"
       unique_id: 'steam_deck_active_game'
       state_topic: "steamdeck/game"
@@ -55,4 +55,29 @@
       availability_topic: "steamdeck/availability"
       payload_available: "online"
       payload_not_available: "offline"
-      expire_after: 90 # 1,5 minutes without update = unavailable       
+      expire_after: 90 # 1,5 minutes without update = unavailable 
+      
+    - name: "Steam Deck Game Library Storage"
+      unique_id: steam_deck_game_library_storage
+      state_topic: "steamdeck/library_storage"
+      value_template: "{{ value_json.total_games | default(0) }}"
+      json_attributes_topic: "steamdeck/library_storage"
+      json_attributes_template: "{{ value_json.games | to_json }}"
+      
+    - name: "Steam Deck AppID"
+      unique_id: 'steam_deck_appid'
+      state_topic: "steamdeck/appid"
+      icon: "mdi:identifier"
+      availability_topic: "steamdeck/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+      expire_after: 90
+
+    - name: "Steam Deck Game Type"
+      unique_id: 'steam_deck_game_type'
+      state_topic: "steamdeck/game_type"
+      icon: "mdi:tag-outline"
+      availability_topic: "steamdeck/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+      expire_after: 90 
