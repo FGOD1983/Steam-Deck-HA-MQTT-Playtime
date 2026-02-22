@@ -1,0 +1,24 @@
+# Steam Deck
+  - sensor: 
+      name: steamdeck_game_cover 
+      command: > 
+        curl -s -X POST 'https://api.igdb.com/v4/games' 
+        -H 'Client-ID: {IGDB-CLIENT-ID}' 
+        -H 'Authorization: Bearer {IGDB-API-TOKEN}' 
+        -H 'Content-Type: text/plain' 
+        -d 'search "{{ states("sensor.steam_deck_active_game_display") }}"; 
+            fields name,cover.url; 
+            limit 1;' 
+      value_template: > 
+        {% set inactive = ['No game opened', 'Offline', 'unavailable', 'unknown', 'none'] %} 
+        {% if states('sensor.steam_deck_active_game_display') | lower in inactive | map('lower') | list %} 
+          No game data loaded 
+        {% else %} 
+          {% set result = value_json %} 
+          {% if result | length > 0 and result[0].cover is defined %} 
+            https:{{ result[0].cover.url | replace('t_thumb', 't_cover_big') }} 
+          {% else %} 
+            No game data loaded 
+          {% endif %} 
+        {% endif %} 
+      scan_interval: 0
