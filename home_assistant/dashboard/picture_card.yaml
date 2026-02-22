@@ -10,6 +10,33 @@ cards:
         - type: picture-elements
           image: /local/steamdeck.png
           elements:
+            - type: image
+              entity: image.steamdeck_active_game_cover
+              style:
+                top: 43%
+                left: 50%
+                width: 200px
+                height: 120px
+                transform: translate(-50%, -50%)
+              card_mod:
+                style: |
+                  hui-image {
+                    position: relative;
+                  }
+                  hui-image::after {
+                    content: "";
+                    position: absolute;
+                    inset: 0;
+                    background: rgba(0,0,0,
+                      {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
+                         and states('sensor.steamdeck_game_cover').startswith('http') %}
+                        0.8
+                      {% else %}
+                        1.0
+                      {% endif %}
+                    );
+                    pointer-events: none;
+                  }
             - type: state-icon
               entity: sensor.steam_deck_network_display
               style:
@@ -25,6 +52,7 @@ cards:
                 text-align: center
                 display: inline-block
                 min-width: 0
+                font-size: 10px
             - type: state-icon
               entity: sensor.steam_deck_battery_display
               style:
@@ -99,6 +127,33 @@ cards:
         - type: picture-elements
           image: /local/steamdeck.png
           elements:
+            - type: image
+              entity: image.steamdeck_active_game_cover
+              style:
+                top: 43%
+                left: 50%
+                width: 200px
+                height: 120px
+                transform: translate(-50%, -50%)
+              card_mod:
+                style: |
+                  hui-image {
+                    position: relative;
+                  }
+                  hui-image::after {
+                    content: "";
+                    position: absolute;
+                    inset: 0;
+                    background: rgba(0,0,0,
+                      {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
+                         and states('sensor.steamdeck_game_cover').startswith('http') %}
+                        0.8
+                      {% else %}
+                        1.0
+                      {% endif %}
+                    );
+                    pointer-events: none;
+                  }
             - type: state-icon
               entity: sensor.steam_deck_network_display
               style:
@@ -114,6 +169,7 @@ cards:
                 text-align: center
                 display: inline-block
                 min-width: 0
+                font-size: 10px
             - type: state-icon
               entity: sensor.steam_deck_battery_display
               style:
