@@ -23,6 +23,7 @@ The system features a Smart Lookup engine that cleans up folder names and fetche
 **🔐 Reboot-Resilient:** Home Assistant logic ensures playtime is saved even if HA restarts mid-session.  
 **📡 Secure MQTT:** Supports TLS/SSL connections for remote tracking.  
 **🎨 Game Cover Art:** Automatically fetches game cover art from IGDB and displays it on your dashboard.  
+**🔄 Auto Token Refresh:** IGDB Bearer token is automatically refreshed before it expires.  
 
 By using a Python script on the Steam Deck and a "Session Lock" logic in Home Assistant, your playtime data remains accurate even if Home Assistant reboots during a gaming session.
 
@@ -31,9 +32,10 @@ By using a Python script on the Steam Deck and a "Session Lock" logic in Home As
 ## 🛠 Prerequisites
 * MQTT Broker: A running broker (like Mosquitto) integrated with Home Assistant.  
 * Steam Deck: Access to Desktop Mode and a terminal (Konsole).  
-* Home Assistant Helpers: Three helpers (Boolean, Datetime, and Text) to manage the session state.
+* Home Assistant Helpers: Several helpers (Boolean, Datetime, and Text) to manage the session state and IGDB tokens.
 
 ## 🎮 [Step 1: Steam Deck Setup](./steam_deck/)
+
 1. Install dependencies
 
 Open Konsole in Desktop Mode and run the following to prepare the environment:
@@ -62,6 +64,7 @@ Create a file called `.config/systemd/user/steamdeck_mqtt_boot.service` and copy
 Create a file called `.config/systemd/user/steamdeck_mqtt_offline.service` and copy the [offline service code](./steam_deck/services/steamdeck_mqtt_offline.service) into the file.
 
 ## 🏠 Step 2: Home Assistant Setup
+
 This part of the setup handles the incoming data, manages the session logic, and ensures everything is saved correctly to a local JSON database.
 
 1. Enable File Writing
@@ -70,12 +73,21 @@ To allow Home Assistant to write to your local storage, add [the following code]
 
 2. Create Helpers (UI)
 
-Go to **Settings > Devices & Services > Helpers** and create these four entities:
+Go to **Settings > Devices & Services > Helpers** and create these entities:
 
+**Session tracking:**
 * **Input Boolean**: `input_boolean.steam_deck_sessie_actief` (Steam Deck Sessie Actief)
 * **Input Datetime**: `input_datetime.steam_deck_sessie_starttijd` (Steam Deck Sessie Starttijd)
 * **Input Text**: `input_text.steam_deck_huidige_game` (Steam Deck Huidige Game)
-* **Input Text**: `input_text.steam_deck_game_cover_url` (Steam Deck Game Cover URL) — used to store the IGDB cover art URL for the currently active game
+* **Input Text**: `input_text.steam_deck_game_cover_url` (Steam Deck Game Cover URL) — stores the IGDB cover art URL for the currently active game
+
+**IGDB API (for cover art):**
+* **Input Text**: `input_text.igdb_client_id` — your Twitch/IGDB Client ID
+* **Input Text**: `input_text.igdb_client_secret` — your Twitch/IGDB Client Secret
+* **Input Text**: `input_text.igdb_bearer_token` — managed automatically, stores the current Bearer token
+* **Input Text**: `input_text.igdb_token_expiry` — managed automatically, stores the token expiry timestamp
+
+> ℹ️ The `igdb_bearer_token` and `igdb_token_expiry` helpers are automatically updated by the cover art automation whenever the token is close to expiring. You only need to set them manually on first setup (see Step 3.3).
 
 3. Sensors & Shell Command
 
@@ -117,12 +129,25 @@ To display game cover art on your dashboard, you need a free IGDB API account. I
    - **Category**: select `Application Integration`
 4. Click **Create**.
 5. On the next screen click **Manage** next to your new application.
-6. Note down your **Client ID** — you will need this in the next steps.
-7. Click **New Secret** to generate a **Client Secret** — copy and save this somewhere safe, it is only shown once.
+6. Note down your **Client ID** — paste this into the `input_text.igdb_client_id` helper you created in Step 2.
+7. Click **New Secret** to generate a **Client Secret** — copy and paste this into the `input_text.igdb_client_secret` helper. Save it somewhere safe as it is only shown once.
 
-### 3.2 Generate a Bearer Token
+### 3.2 Add the Shell Commands
 
-IGDB uses OAuth2 client credentials to authenticate. Run the following command in your terminal, replacing the placeholders with your actual Client ID and Client Secret from the previous step:
+Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml) into your `shell_commands.yaml` file. This adds two commands:
+
+- `fetch_igdb_cover` — searches IGDB for a game cover by name
+- `refresh_igdb_token` — calls Twitch to get a new Bearer token when the current one is about to expire
+
+Both commands receive their credentials as variables from the automation at runtime, so no credentials are hardcoded in the config files.
+
+After adding the shell commands, do a **full Home Assistant restart** — shell commands require a full restart to register.
+
+### 3.3 Generate the Initial Bearer Token
+
+The automation handles token renewal automatically, but you need to set up the initial token manually once.
+
+Run the following command in your terminal, replacing the placeholders with your actual Client ID and Client Secret:
 ```bash
 curl -s -X POST 'https://id.twitch.tv/oauth2/token' \
   -d 'client_id=YOUR_CLIENT_ID' \
@@ -139,28 +164,24 @@ The response will look like this:
 }
 ```
 
-Copy the `access_token` value — this is your **Bearer Token** to use in the shell command below.
+Now calculate the expiry date by adding `expires_in` seconds to the current time:
+```bash
+# Linux
+date -d "+5183944 seconds" --iso-8601=seconds
 
-> ⚠️ **Important:** Bearer tokens expire after approximately 60 days. When your cover art stops loading, simply re-run the curl command above to generate a new token and update it in your `shell_commands.yaml`. A common symptom of an expired token is the cover art not updating even when a game is running.
-
-### 3.3 Add the Shell Command
-
-The cover art is fetched by a shell command that is triggered by an automation whenever the active game changes. This approach ensures IGDB is only called once per game session, avoiding any memory or performance issues.
-
-Add the following to your `shell_commands.yaml`, replacing `YOUR_CLIENT_ID` and `YOUR_BEARER_TOKEN` with the values from the steps above:
-```yaml
-shell_command:
-  fetch_igdb_cover: >
-    curl -s --max-time 5 -X POST 'https://api.igdb.com/v4/games'
-    -H 'Client-ID: YOUR_CLIENT_ID'
-    -H 'Authorization: Bearer YOUR_BEARER_TOKEN'
-    -H 'Content-Type: text/plain'
-    -d 'search "{{ game_name }}"; fields name,cover.url; limit 1;'
+# Mac
+date -v +5183944S +"%Y-%m-%dT%H:%M:%S"
 ```
+
+Then set the values in your helpers:
+- `input_text.igdb_bearer_token` → paste the `access_token` value
+- `input_text.igdb_token_expiry` → paste the calculated expiry date (e.g. `2026-04-28T22:15:00`)
+
+> ✅ After this one-time setup the automation will automatically refresh the token whenever it is within 7 days of expiring. You will never need to manually update it again.
 
 ### 3.4 Add the Cover Art Automation
 
-This automation triggers whenever the active game sensor changes. It fetches the cover from IGDB when a game starts and clears it when the game stops.
+This automation triggers whenever the active game sensor changes. Before fetching the cover it checks if the Bearer token is still valid and refreshes it automatically if needed. It fetches the cover from IGDB when a game starts and clears it when the game stops.
 
 Create a new automation, switch to YAML mode and paste in the [`automation_game_cover.yaml`](./home_assistant/automation_game_cover.yaml) code.
 
@@ -184,7 +205,7 @@ The base64 string is a 1×1 black pixel PNG that is displayed when no game is ru
 
 ## 📊 Step 4: Visualizing the Data
 
-To read the data back into Home Assistant for your dashboard, you can use 2 cards. The first one I use is the picture card which uses [`steamdeck.png`](./home_assistant/www/steamdeck.png). You will need to upload this file into your `www` where you also created the `steam_library.json` file.
+To read the data back into Home Assistant for your dashboard, you can use 2 cards. The first one I use is the picture card which uses [`steamdeck.png`](./home_assistant/www/steamdeck.png). You will need to upload this file into your `www` folder where you also created the `steam_library.json` file.
 
 When that is done you can go to your dashboard and create a new card with the [`picture_card.yaml`](./home_assistant/dashboard/picture_card.yaml) code.
 
