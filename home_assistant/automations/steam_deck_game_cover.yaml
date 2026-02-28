@@ -11,13 +11,47 @@ actions:
               {{ trigger.to_state.state not in 
                  ['No game opened', 'Offline', 'unavailable', 'unknown', 'none', ''] }}
         sequence:
+          - if:
+              - condition: template
+                value_template: >
+                  {% set expiry = states('input_text.igdb_token_expiry') %} {%
+                  set token = states('input_text.igdb_bearer_token') %} {% if
+                  token in ['', 'none', 'unknown', 'unavailable'] %}
+                    true
+                  {% elif expiry in ['', 'none', 'unknown', 'unavailable'] %}
+                    true
+                  {% else %}
+                    {{ (as_datetime(expiry) - now()).days < 7 }}
+                  {% endif %}
+            then:
+              - data:
+                  client_id: "{{ states('input_text.igdb_client_id') }}"
+                  client_secret: "{{ states('input_text.igdb_client_secret') }}"
+                response_variable: token_response
+                action: shell_command.refresh_igdb_token
+              - variables:
+                  new_token: "{{ (token_response.stdout | from_json).access_token }}"
+                  new_expiry: >
+                    {{ (now() + timedelta(seconds=(token_response.stdout |
+                    from_json).expires_in)).isoformat() }}
+              - target:
+                  entity_id: input_text.igdb_bearer_token
+                data:
+                  value: "{{ new_token }}"
+                action: input_text.set_value
+              - target:
+                  entity_id: input_text.igdb_token_expiry
+                data:
+                  value: "{{ new_expiry }}"
+                action: input_text.set_value
           - data:
+              client_id: "{{ states('input_text.igdb_client_id') }}"
+              bearer_token: "{{ states('input_text.igdb_bearer_token') }}"
               game_name: "{{ trigger.to_state.state }}"
             response_variable: igdb_response
             action: shell_command.fetch_igdb_cover
           - target:
-              entity_id:
-                - input_text.steam_deck_game_cover_url
+              entity_id: input_text.steam_deck_game_cover_url
             data:
               value: |
                 {% set content = igdb_response.stdout %} {% if content %}
@@ -31,6 +65,9 @@ actions:
                   none
                 {% endif %}
             action: input_text.set_value
+          - target:
+              entity_id: image.steamdeck_active_game_cover
+            action: homeassistant.update_entity
       - conditions:
           - condition: template
             value_template: |
@@ -42,4 +79,7 @@ actions:
             data:
               value: none
             action: input_text.set_value
-
+          - target:
+              entity_id: image.steamdeck_active_game_cover
+            action: homeassistant.update_entity
+mode: single
