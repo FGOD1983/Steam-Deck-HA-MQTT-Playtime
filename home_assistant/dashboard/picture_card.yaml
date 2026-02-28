@@ -29,8 +29,8 @@ cards:
                     inset: 0;
                     background: rgba(0,0,0,
                       {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
-                         and states('sensor.steamdeck_game_cover').startswith('http') %}
-                        0.8
+                         and states('input_text.steam_deck_game_cover_url').startswith('http') %}
+                        0.6
                       {% else %}
                         1.0
                       {% endif %}
@@ -146,8 +146,8 @@ cards:
                     inset: 0;
                     background: rgba(0,0,0,
                       {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
-                         and states('sensor.steamdeck_game_cover').startswith('http') %}
-                        0.8
+                         and states('input_text.steam_deck_game_cover_url').startswith('http') %}
+                        0.6
                       {% else %}
                         1.0
                       {% endif %}
