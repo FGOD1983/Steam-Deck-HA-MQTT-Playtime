@@ -1,3 +1,10 @@
 shell_command:
   # Steam Deck
   update_steam_library: "/bin/bash -c 'echo \"{{ json_data }}\" | base64 -d > /config/www/steam_library.json'"
+  
+  fetch_igdb_cover: >-
+  curl -s --max-time 5 -X POST 'https://api.igdb.com/v4/games'
+  -H 'Client-ID: {IGDB-CLIENT-ID}'
+  -H 'Authorization: Bearer {IGDB-API-TOKEN}'
+  -H 'Content-Type: text/plain'
+  -d 'search "{{ game_name }}"; fields name,cover.url; limit 1;'
