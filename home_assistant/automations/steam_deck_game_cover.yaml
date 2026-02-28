@@ -1,0 +1,45 @@
+alias: Steam Deck - Fetch Game Cover
+description: ""
+triggers:
+  - entity_id: sensor.steam_deck_active_game_display
+    trigger: state
+actions:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |
+              {{ trigger.to_state.state not in 
+                 ['No game opened', 'Offline', 'unavailable', 'unknown', 'none', ''] }}
+        sequence:
+          - data:
+              game_name: "{{ trigger.to_state.state }}"
+            response_variable: igdb_response
+            action: shell_command.fetch_igdb_cover
+          - target:
+              entity_id:
+                - input_text.steam_deck_game_cover_url
+            data:
+              value: |
+                {% set content = igdb_response.stdout %} {% if content %}
+                  {% set result = content | from_json %}
+                  {% if result | length > 0 and result[0].cover is defined %}
+                    https:{{ result[0].cover.url | replace('t_thumb', 't_cover_big') }}
+                  {% else %}
+                    none
+                  {% endif %}
+                {% else %}
+                  none
+                {% endif %}
+            action: input_text.set_value
+      - conditions:
+          - condition: template
+            value_template: |
+              {{ trigger.to_state.state in 
+                 ['No game opened', 'Offline', 'unavailable', 'unknown', 'none', ''] }}
+        sequence:
+          - target:
+              entity_id: input_text.steam_deck_game_cover_url
+            data:
+              value: none
+            action: input_text.set_value
+

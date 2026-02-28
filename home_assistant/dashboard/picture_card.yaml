@@ -15,8 +15,8 @@ cards:
               style:
                 top: 43%
                 left: 50%
-                width: 200px
-                height: 120px
+                width: 180px
+                height: 100px
                 transform: translate(-50%, -50%)
               card_mod:
                 style: |
@@ -234,3 +234,4 @@ cards:
                     line-height: 1.1;
                     padding-top: 0.3em;
                       }
+

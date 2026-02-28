@@ -189,10 +189,9 @@
   - name: Steamdeck Active Game Cover
     unique_id: steamdeck_active_game_cover
     url: >
-      {% set cover = states('sensor.steamdeck_game_cover') %}
-      {% if cover != 'unknown' and cover != 'unavailable' and cover.startswith('http') %}
+      {% set cover = states('input_text.steam_deck_game_cover_url') %}
+      {% if cover != 'none' and cover != 'unknown' and cover != 'unavailable' and cover.startswith('http') %}
         {{ cover }}
       {% else %}
-        {# Een solide zwarte 1x1 pixel PNG via Base64 #}
         data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR42mNk+M8AAY0BAJ8f66oAAAAASUVORK5CYII=
       {% endif %}
