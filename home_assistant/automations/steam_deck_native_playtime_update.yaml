@@ -1,0 +1,90 @@
+alias: Steam Deck - Steam Native Playtime Update
+description: >
+  Triggered when the Steam playtime timer finishes. Fetches the official
+  playtime from the Steam API and overwrites the session-tracked value in the
+  library. Waits for the main playtime automation to finish before writing to
+  avoid JSON file corruption.
+triggers:
+  - trigger: event
+    event_type: timer.finished
+    event_data:
+      entity_id: timer.steam_playtime_update
+actions:
+  - wait_template: >
+      {{ state_attr('automation.steam_deck_library_veilig_opslaan', 'current') |
+      int(0) == 0 }}
+    timeout: "00:00:30"
+    continue_on_timeout: false
+  - condition: template
+    value_template: >
+      {{ states('input_text.steam_pending_appid') not in ['', 'unknown',
+      'unavailable', 'none']
+         and states('input_text.steam_pending_game_name') not in ['', 'unknown', 'unavailable', 'none'] }}
+  - action: shell_command.fetch_steam_playtime
+    data:
+      api_key: "{{ states('input_text.steam_api_key') }}"
+      steam_id: "{{ states('input_text.steam_user_id') }}"
+    response_variable: steam_response
+  - variables:
+      pending_appid: "{{ states('input_text.steam_pending_appid') }}"
+      pending_game_name: "{{ states('input_text.steam_pending_game_name') }}"
+      steam_minutes: |
+        {% set content = steam_response.stdout %} {% if content %}
+          {% set data = content | from_json %}
+          {% set games = data.get('response', {}).get('games', []) %}
+          {% set found = games | selectattr('appid', 'equalto', pending_appid | int) | list %}
+          {% if found | length > 0 %}
+            {{ found[0].playtime_forever | int(0) }}
+          {% else %}
+            -1
+          {% endif %}
+        {% else %}
+          -1
+        {% endif %}
+  - condition: template
+    value_template: "{{ steam_minutes | int(-1) >= 0 }}"
+  - action: shell_command.update_steam_library
+    data:
+      json_data: >-
+        {% set current_library = state_attr('sensor.steam_deck_game_playtime',
+        'games') or {} %}
+
+        {# Match game name case-insensitively against existing library keys #}
+        {% set matched_name = namespace(key=pending_game_name) %} {% for
+        existing_name in current_library.keys() %}
+          {% if existing_name | lower == pending_game_name | lower %}
+            {% set matched_name.key = existing_name %}
+          {% endif %}
+        {% endfor %} {% set game_name = matched_name.key %}
+
+        {# Keep the existing last_played timestamp from the session save #} {%
+        set existing_entry = current_library.get(game_name, 0) %} {% set
+        last_played = existing_entry.last_played
+           if existing_entry is mapping else now().isoformat() %}
+
+        {# Convert Steam minutes to seconds to match library format #} {% set
+        steam_seconds = (steam_minutes | int) * 60 %}
+
+        {% set updated_entry = {
+          "seconds": steam_seconds,
+          "last_played": last_played
+        } %}
+
+        {% set updated_library = dict(current_library, **{game_name:
+        updated_entry}) %} {{ ({"games": updated_library} |
+        to_json(pretty_print=True)) | base64_encode }}
+  - delay: "00:00:02"
+  - action: homeassistant.update_entity
+    target:
+      entity_id: sensor.steam_deck_game_playtime
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.steam_pending_appid
+    data:
+      value: ""
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.steam_pending_game_name
+    data:
+      value: ""
+mode: single
