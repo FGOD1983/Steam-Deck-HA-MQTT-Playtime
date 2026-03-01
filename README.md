@@ -24,6 +24,7 @@ The system features a Smart Lookup engine that cleans up folder names and fetche
 **📡 Secure MQTT:** Supports TLS/SSL connections for remote tracking.  
 **🎨 Game Cover Art:** Automatically fetches game cover art from IGDB and displays it on your dashboard.  
 **🔄 Auto Token Refresh:** IGDB Bearer token is automatically refreshed before it expires.  
+**🕹️ Steam Native Playtime Sync:** Official Steam playtime is fetched from the Steam API after each session and used to keep your library accurate.  
 
 By using a Python script on the Steam Deck and a "Session Lock" logic in Home Assistant, your playtime data remains accurate even if Home Assistant reboots during a gaming session.
 
@@ -32,13 +33,14 @@ By using a Python script on the Steam Deck and a "Session Lock" logic in Home As
 ## 🛠 Prerequisites
 * MQTT Broker: A running broker (like Mosquitto) integrated with Home Assistant.  
 * Steam Deck: Access to Desktop Mode and a terminal (Konsole).  
-* Home Assistant Helpers: Several helpers (Boolean, Datetime, and Text) to manage the session state and IGDB tokens.
+* Home Assistant Helpers: Several helpers (Boolean, Datetime, Text, and Timer) to manage the session state, IGDB tokens, and Steam playtime sync.
 
 ## 🎮 [Step 1: Steam Deck Setup](./steam_deck/)
 
 1. Install dependencies
 
 Open Konsole in Desktop Mode and run the following to prepare the environment:
+
 ```bash
 # Create a folder for the scripts
 mkdir -p ~/scripts
@@ -89,6 +91,15 @@ Go to **Settings > Devices & Services > Helpers** and create these entities:
 
 > ℹ️ The `igdb_bearer_token` and `igdb_token_expiry` helpers are automatically updated by the cover art automation whenever the token is close to expiring. You only need to set them manually on first setup (see Step 3.3).
 
+**Steam Native playtime sync:**
+* **Input Text**: `input_text.steam_api_key` — your Steam Web API key (see Step 4.1)
+* **Input Text**: `input_text.steam_user_id` — your 64-bit Steam ID (see Step 4.1)
+* **Input Text**: `input_text.steam_pending_appid` — managed automatically, holds the appid while the sync timer is running
+* **Input Text**: `input_text.steam_pending_game_name` — managed automatically, holds the game name while the sync timer is running
+* **Timer**: `timer.steam_playtime_update` — 3 minute timer that fires after a Steam Native game is closed, triggering the playtime sync automation
+
+> ℹ️ The `steam_pending_appid`, `steam_pending_game_name` and `timer.steam_playtime_update` are all managed automatically. You only need to create them — the automations handle the rest.
+
 3. Sensors & Shell Command
 
 Now we need to build the sensors and the needed shell command for the data. These can be created in the `configuration.yaml` or in their own separate yaml file which should then be included in the `configuration.yaml`.
@@ -109,11 +120,15 @@ Use a File Editor or SSH to go to your `/homeassistant/www/` folder (which is ba
 
 Create a file there named `steam_library.json` and copy in the template data from the [`steam_library.json`](./home_assistant/www/steam_library.json) file from this repo.
 
-5. The Core Automation
+5. The Core Automations
 
-This automation is the "Brain". It manages the session, calculates the time, and triggers the save command. It is reboot-proof: if Home Assistant restarts during a session, the input_boolean ensures the session remains active, and the input_text remembers which game you were playing.
+**Playtime automation** — this is the "Brain". It manages the session, calculates the time, and triggers the save command. It is reboot-proof: if Home Assistant restarts during a session, the input_boolean ensures the session remains active, and the input_text remembers which game you were playing. For Steam Native games that are properly closed it also starts the sync timer.
 
-You can create a new Home Automation, switch to yaml mode and paste in the [`automations.yaml`](./home_assistant/automation.yaml) code into your new automation and save it.
+Create a new Home Automation, switch to yaml mode and paste in the [`automation_playtime.yaml`](./home_assistant/automation_playtime.yaml) code.
+
+**Steam playtime sync automation** — this automation fires when the 3 minute timer finishes after a Steam Native game is closed. It fetches the official total playtime from the Steam API and overwrites the session-tracked value in the library, ensuring your playtime is always accurate. It waits for the main automation to finish before writing to prevent JSON file corruption.
+
+Create a second new Home Automation, switch to yaml mode and paste in the [`automation_steam_playtime.yaml`](./home_assistant/automation_steam_playtime.yaml) code.
 
 ## 🎨 Step 3: IGDB Game Cover Art Setup
 
@@ -148,6 +163,7 @@ After adding the shell commands, do a **full Home Assistant restart** — shell 
 The automation handles token renewal automatically, but you need to set up the initial token manually once.
 
 Run the following command in your terminal, replacing the placeholders with your actual Client ID and Client Secret:
+
 ```bash
 curl -s -X POST 'https://id.twitch.tv/oauth2/token' \
   -d 'client_id=YOUR_CLIENT_ID' \
@@ -156,6 +172,7 @@ curl -s -X POST 'https://id.twitch.tv/oauth2/token' \
 ```
 
 The response will look like this:
+
 ```json
 {
   "access_token": "your_bearer_token_here",
@@ -165,6 +182,7 @@ The response will look like this:
 ```
 
 Now calculate the expiry date by adding `expires_in` seconds to the current time:
+
 ```bash
 # Linux
 date -d "+5183944 seconds" --iso-8601=seconds
@@ -188,6 +206,7 @@ Create a new automation, switch to YAML mode and paste in the [`automation_game_
 ### 3.5 Add the Image Entity
 
 The image entity converts the cover URL stored in the `input_text` helper into an image entity that can be used directly in `picture-elements` dashboard cards. Add the following to your `templates.yaml`:
+
 ```yaml
 - image:
   - name: Steamdeck Active Game Cover
@@ -203,7 +222,38 @@ The image entity converts the cover URL stored in the `input_text` helper into a
 
 The base64 string is a 1×1 black pixel PNG that is displayed when no game is running, keeping the dashboard element clean and dark instead of showing a broken image or loading spinner.
 
-## 📊 Step 4: Visualizing the Data
+## 🕹️ Step 4: Steam Native Playtime Sync Setup
+
+For Steam Native games, the system fetches the official total playtime directly from Steam after each session and uses that to keep your library accurate. This means your playtime in Home Assistant will always match what Steam reports, including any time played on other devices.
+
+> ℹ️ **How it works:** When a Steam Native game is properly closed (not going to standby), the main automation starts a 3 minute timer to give Steam time to update its servers. When the timer finishes a separate automation calls the Steam API, finds the game by appid, and overwrites the session-tracked playtime with the official Steam total. If the Deck goes to standby with a game open, the session time is used as-is since Steam has not updated the playtime yet.
+
+### 4.1 Get Your Steam API Key and Steam ID
+
+**Steam API Key:**
+1. Go to [https://steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) and log in with your Steam account.
+2. Enter any domain name in the field (e.g. `localhost`) — it does not matter for personal use.
+3. Click **Register** and copy the API key shown on the page.
+4. Paste it into the `input_text.steam_api_key` helper you created in Step 2.
+
+**Steam ID (64-bit):**
+1. Go to [https://steamid.io](https://steamid.io) and enter your Steam profile URL or username.
+2. Copy the **steamID64** value — a 17-digit number like `76561198012345678`.
+3. Paste it into the `input_text.steam_user_id` helper you created in Step 2.
+
+> ⚠️ Make sure your Steam profile's **Game details** privacy setting is set to **Public**, otherwise the API will return no data.
+
+### 4.2 Add the Shell Commands
+
+Copy the Shell Commands from the shell_commands.yaml to your configuration.yaml or seperate shell commands yaml file in Home Assistant
+
+Do a **full Home Assistant restart** after adding the shell command.
+
+### 4.3 Add the Steam Playtime Sync Automation
+
+Create a new automation, switch to YAML mode and paste in the [`automation_steam_playtime.yaml`](./home_assistant/automation_steam_playtime.yaml) code.
+
+## 📊 Step 5: Visualizing the Data
 
 To read the data back into Home Assistant for your dashboard, you can use 2 cards. The first one I use is the picture card which uses [`steamdeck.png`](./home_assistant/www/steamdeck.png). You will need to upload this file into your `www` folder where you also created the `steam_library.json` file.
 
