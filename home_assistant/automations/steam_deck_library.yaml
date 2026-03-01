@@ -1,5 +1,5 @@
-alias: Steam Deck Library
-description: Save Steam Deck playtime of games into a readable JSON library.
+alias: Steam Deck Library - Safe Save
+description: Saves playtime with protection against reboots and timezone errors.
 triggers:
   - trigger: state
     entity_id: sensor.steam_deck_active_game_display
@@ -20,9 +20,9 @@ actions:
             state: "off"
           - condition: template
             value_template: >
-              {% set negeren = ['unknown', 'unavailable', 'none', 'idle',
+              {% set ignore = ['unknown', 'unavailable', 'none', 'idle',
               'offline', 'not playing', 'no game opened'] %} {{
-              trigger.to_state.state | lower | trim not in negeren }}
+              trigger.to_state.state | lower | trim not in ignore }}
         sequence:
           - action: input_datetime.set_datetime
             target:
@@ -37,6 +37,25 @@ actions:
           - action: input_boolean.turn_on
             target:
               entity_id: input_boolean.steam_deck_sessie_actief
+          - variables:
+              saved_appid: |
+                {{ states('sensor.steam_deck_appid') | trim }}
+              saved_game_type: |
+                {{ states('sensor.steam_deck_game_type') | trim }}
+              saved_game_name: |
+                {{ states('input_text.steam_deck_huidige_game') | trim }}
+              game_properly_closed: |
+                {{ trigger.to_state.state | lower | trim != 'offline' }}
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.steam_pending_appid
+            data:
+              value: "{{ saved_appid }}"
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.steam_pending_game_name
+            data:
+              value: "{{ saved_game_name }}"
       - conditions:
           - condition: trigger
             id: game_state_change
@@ -45,53 +64,61 @@ actions:
             state: "on"
           - condition: template
             value_template: >
-              {% set negeren = ['unknown', 'unavailable', 'none', 'idle',
+              {% set ignore = ['unknown', 'unavailable', 'none', 'idle',
               'offline', 'not playing', 'no game opened'] %} {{
-              trigger.to_state.state | lower | trim in negeren }}
+              trigger.to_state.state | lower | trim in ignore }}
         sequence:
+          - variables:
+              saved_appid: |
+                {{ states('sensor.steam_deck_appid') | trim }}
+              saved_game_type: |
+                {{ states('sensor.steam_deck_game_type') | trim }}
+              saved_game_name: |
+                {{ states('input_text.steam_deck_huidige_game') | trim }}
+              game_properly_closed: |
+                {{ trigger.to_state.state | lower | trim != 'offline' }}
           - action: shell_command.update_steam_library
             data:
               json_data: >-
                 {% set current_library =
                 state_attr('sensor.steam_deck_game_playtime', 'games') or {} %}
 
-                {# 1. TIJD BEREKENING (Rekent tot het moment van nu/failsafe) #}
-                {% set start_helper =
+                {# 1. Calculate session duration #} {% set session_start =
                 states('input_datetime.steam_deck_sessie_starttijd') |
-                as_datetime %} {% set nu_zonder_zone =
-                now().replace(tzinfo=None) %} {% set duration = (nu_zonder_zone
-                - start_helper).total_seconds() | float(0) %}
+                as_datetime %} {% set now_no_tz = now().replace(tzinfo=None) %}
+                {% set duration = (now_no_tz - session_start).total_seconds() |
+                float(0) %}
 
-                {# 2. GAME NAAM TERUGHALEN (Altijd uit de text-helper voor
-                reboot-veiligheid) #} {% set game_naam_opgeslagen =
+                {# 2. Get game name from helper (always used for reboot safety)
+                #} {% set stored_game_name =
                 states('input_text.steam_deck_huidige_game') | trim %}
 
-                {# Match de naam met de bestaande keys in de library
-                (case-insensitive) #} {% set gevonden_naam =
-                namespace(key=game_naam_opgeslagen) %} {% for bestaande_naam in
+                {# 3. Match name against existing library keys
+                (case-insensitive) #} {% set matched_name =
+                namespace(key=stored_game_name) %} {% for existing_name in
                 current_library.keys() %}
-                  {% if bestaande_naam | lower == game_naam_opgeslagen | lower %}
-                    {% set gevonden_naam.key = bestaande_naam %}
+                  {% if existing_name | lower == stored_game_name | lower %}
+                    {% set matched_name.key = existing_name %}
                   {% endif %}
-                {% endfor %} {% set game_naam = gevonden_naam.key %}
+                {% endfor %} {% set game_name = matched_name.key %}
 
-                {# 3. BESTAANDE DATA OPHALEN #} {% set bestaande_entry =
-                current_library.get(game_naam, 0) %} {% if bestaande_entry is
+                {# 4. Get existing playtime data #} {% set existing_entry =
+                current_library.get(game_name, 0) %} {% if existing_entry is
                 mapping %}
-                  {% set oude_tijd = bestaande_entry.seconds | float(0) %}
+                  {% set existing_seconds = existing_entry.seconds | float(0) %}
                 {% else %}
-                  {% set oude_tijd = bestaande_entry | float(0) %}
+                  {% set existing_seconds = existing_entry | float(0) %}
                 {% endif %}
 
-                {# 4. NIEUWE JSON ENTRY SAMENSTELLEN #} {% set updated_entry = {
-                  "seconds": oude_tijd + duration,
-                  "last_played": start_helper.isoformat()
+                {# 5. Build updated entry #} {% set updated_entry = {
+                  "seconds": existing_seconds + duration,
+                  "last_played": session_start.isoformat()
                 } %}
 
-                {# 5. VOLLEDIGE LIBRARY UPDATEN EN ENCODEN #} {% set
-                updated_library = dict(current_library, **{game_naam:
-                updated_entry}) %} {{ ({"games": updated_library} |
-                to_json(pretty_print=True)) | base64_encode }}
+                {# 6. Update full library and encode #} {% set updated_library =
+                dict(current_library, **{game_name: updated_entry}) %} {{
+                ({"games": updated_library} | to_json(pretty_print=True)) |
+                base64_encode }}
           - action: input_boolean.turn_off
             target:
               entity_id: input_boolean.steam_deck_sessie_actief
@@ -99,9 +126,29 @@ actions:
             target:
               entity_id: input_text.steam_deck_huidige_game
             data:
-              value: Geen game
+              value: No game
           - delay: "00:00:02"
           - action: homeassistant.update_entity
             target:
               entity_id: sensor.steam_deck_game_playtime
+          - if:
+              - condition: template
+                value_template: |
+                  {{ saved_game_type == 'Steam Native'
+                     and game_properly_closed
+                     and saved_appid not in ['', 'unknown', 'unavailable', 'none'] }}
+            then:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.steam_pending_appid
+                data:
+                  value: "{{ saved_appid }}"
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.steam_pending_game_name
+                data:
+                  value: "{{ saved_game_name }}"
+              - action: timer.start
+                target:
+                  entity_id: timer.steam_playtime_update
 mode: single
