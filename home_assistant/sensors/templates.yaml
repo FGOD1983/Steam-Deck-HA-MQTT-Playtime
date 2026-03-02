@@ -184,12 +184,23 @@
           mdi:controller
         {% endif %}
         
+    - name: Steam Deck Cover URL
+      unique_id: steam_deck_cover_url
+      state: >
+        {% set game_type = states('sensor.steam_deck_game_type') %}
+        {% set appid = states('sensor.steam_deck_appid') %}
+        {% set igdb = states('input_text.steam_deck_game_cover_url') %}
+        {% if game_type == 'Steam Native' and appid not in ['', 'unknown', 'unavailable', 'none'] %}
+          https://cdn.cloudflare.steamstatic.com/steam/apps/{{ appid }}/header.jpg
+        {% else %}
+          {{ igdb }}
+        {% endif %}
 
 - image:
   - name: Steamdeck Active Game Cover
     unique_id: steamdeck_active_game_cover
     url: >
-      {% set cover = states('input_text.steam_deck_game_cover_url') %}
+      {% set cover = states('sensor.steam_deck_cover_url') %}
       {% if cover != 'none' and cover != 'unknown' and cover != 'unavailable' and cover.startswith('http') %}
         {{ cover }}
       {% else %}

@@ -11,16 +11,6 @@ conditions:
       none and sensor.state != 'unavailable' and 
       state_attr('sensor.steam_deck_game_playtime', 'games') is not none }}
 actions:
-  - variables:
-      saved_appid: |
-        {{ states('sensor.steam_deck_appid') | trim }}
-      saved_game_type: |
-        {{ states('sensor.steam_deck_game_type') | trim }}
-      saved_game_name: |
-        {{ states('input_text.steam_deck_huidige_game') | trim }}
-      game_properly_closed: |
-        {{ trigger.to_state.state | lower | trim != 'offline' }}
-    enabled: true
   - choose:
       - conditions:
           - condition: trigger
@@ -34,6 +24,7 @@ actions:
               'offline', 'not playing', 'no game opened'] %} {{
               trigger.to_state.state | lower | trim not in ignore }}
         sequence:
+          - delay: "00:00:02"
           - action: input_datetime.set_datetime
             target:
               entity_id: input_datetime.steam_deck_sessie_starttijd
@@ -51,12 +42,12 @@ actions:
             target:
               entity_id: input_text.steam_pending_appid
             data:
-              value: "{{ saved_appid }}"
+              value: "{{ states('sensor.steam_deck_appid') | trim }}"
           - action: input_text.set_value
             target:
-              entity_id: input_text.steam_pending_game_name
+              entity_id: input_text.steam_pending_game_type
             data:
-              value: "{{ saved_game_name }}"
+              value: "{{ states('sensor.steam_deck_game_type') | trim }}"
       - conditions:
           - condition: trigger
             id: game_state_change
@@ -69,6 +60,11 @@ actions:
               'offline', 'not playing', 'no game opened'] %} {{
               trigger.to_state.state | lower | trim in ignore }}
         sequence:
+          - variables:
+              saved_appid: "{{ states('input_text.steam_pending_appid') | trim }}"
+              saved_game_type: "{{ states('input_text.steam_pending_game_type') | trim }}"
+              saved_game_name: "{{ states('input_text.steam_deck_huidige_game') | trim }}"
+              game_properly_closed: "{{ trigger.to_state.state | lower | trim != 'offline' }}"
           - action: shell_command.update_steam_library
             data:
               json_data: >-
@@ -143,4 +139,15 @@ actions:
               - action: timer.start
                 target:
                   entity_id: timer.steam_playtime_update
+            else:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.steam_pending_appid
+                data:
+                  value: ""
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.steam_pending_game_type
+                data:
+                  value: ""
 mode: single
