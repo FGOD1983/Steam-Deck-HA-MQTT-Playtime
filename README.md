@@ -124,11 +124,11 @@ Create a file there named `steam_library.json` and copy in the template data fro
 
 **Playtime automation** — this is the "Brain". It manages the session, calculates the time, and triggers the save command. It is reboot-proof: if Home Assistant restarts during a session, the input_boolean ensures the session remains active, and the input_text remembers which game you were playing. For Steam Native games that are properly closed it also starts the sync timer.
 
-Create a new Home Automation, switch to yaml mode and paste in the [`automation_playtime.yaml`](./home_assistant/automation_playtime.yaml) code.
+Create a new Home Automation, switch to yaml mode and paste in the [`steam_deck_library.yaml`](./home_assistant/automations/steam_deck_library.yaml) code.
 
 **Steam playtime sync automation** — this automation fires when the 3 minute timer finishes after a Steam Native game is closed. It fetches the official total playtime from the Steam API and overwrites the session-tracked value in the library, ensuring your playtime is always accurate. It waits for the main automation to finish before writing to prevent JSON file corruption.
 
-Create a second new Home Automation, switch to yaml mode and paste in the [`automation_steam_playtime.yaml`](./home_assistant/automation_steam_playtime.yaml) code.
+Create a second new Home Automation, switch to yaml mode and paste in the [`steam_deck_native_playtime_update.yaml`](./home_assistant/automations/steam_deck_native_playtime_update.yaml) code.
 
 ## 🎨 Step 3: IGDB Game Cover Art Setup
 
@@ -201,26 +201,15 @@ Then set the values in your helpers:
 
 This automation triggers whenever the active game sensor changes. Before fetching the cover it checks if the Bearer token is still valid and refreshes it automatically if needed. It fetches the cover from IGDB when a game starts and clears it when the game stops.
 
-Create a new automation, switch to YAML mode and paste in the [`automation_game_cover.yaml`](./home_assistant/automation_game_cover.yaml) code.
+Create a new automation, switch to YAML mode and paste in the [`steam_deck_game_cover.yaml`](./home_assistant/automations/steam_deck_game_cover.yaml) code.
 
 ### 3.5 Add the Image Entity
 
-The image entity converts the cover URL stored in the `input_text` helper into an image entity that can be used directly in `picture-elements` dashboard cards. Add the following to your `templates.yaml`:
+The cover URL template sensor and image entity are already included in:
 
-```yaml
-- image:
-  - name: Steamdeck Active Game Cover
-    unique_id: steamdeck_active_game_cover
-    url: >
-      {% set cover = states('input_text.steam_deck_game_cover_url') %}
-      {% if cover != 'none' and cover != 'unknown' and cover != 'unavailable' and cover.startswith('http') %}
-        {{ cover }}
-      {% else %}
-        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR42mNk+M8AAY0BAJ8f66oAAAAASUVORK5CYII=
-      {% endif %}
-```
+[`templates.yaml`](./home_assistant/sensors/templates.yaml)
 
-The base64 string is a 1×1 black pixel PNG that is displayed when no game is running, keeping the dashboard element clean and dark instead of showing a broken image or loading spinner.
+You can copy them from the templates.yaml file into your own Home Assistant configuration.
 
 ## 🕹️ Step 4: Steam Native Playtime Sync Setup
 
@@ -251,7 +240,7 @@ Do a **full Home Assistant restart** after adding the shell command.
 
 ### 4.3 Add the Steam Playtime Sync Automation
 
-Create a new automation, switch to YAML mode and paste in the [`automation_steam_playtime.yaml`](./home_assistant/automation_steam_playtime.yaml) code.
+Create a new automation, switch to YAML mode and paste in the [`steam_deck_native_playtime_update.yaml`](./home_assistant/automations/steam_deck_native_playtime_update.yaml) code.
 
 ## 📊 Step 5: Visualizing the Data
 

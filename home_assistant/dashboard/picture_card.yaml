@@ -29,7 +29,7 @@ cards:
                     inset: 0;
                     background: rgba(0,0,0,
                       {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
-                         and states('input_text.steam_deck_game_cover_url').startswith('http') %}
+                         and states('sensor.steam_deck_cover_url').startswith('http') %}
                         0.6
                       {% else %}
                         1.0
@@ -146,7 +146,7 @@ cards:
                     inset: 0;
                     background: rgba(0,0,0,
                       {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
-                         and states('input_text.steam_deck_game_cover_url').startswith('http') %}
+                         and states('sensor.steam_deck_cover_url').startswith('http') %}
                         0.6
                       {% else %}
                         1.0
@@ -234,4 +234,3 @@ cards:
                     line-height: 1.1;
                     padding-top: 0.3em;
                       }
-
