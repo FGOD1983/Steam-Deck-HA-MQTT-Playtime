@@ -94,11 +94,12 @@ Go to **Settings > Devices & Services > Helpers** and create these entities:
 **Steam Native playtime sync:**
 * **Input Text**: `input_text.steam_api_key` — your Steam Web API key (see Step 4.1)
 * **Input Text**: `input_text.steam_user_id` — your 64-bit Steam ID (see Step 4.1)
-* **Input Text**: `input_text.steam_pending_appid` — managed automatically, holds the appid while the sync timer is running
+* **Input Text**: `input_text.steam_pending_appid` — managed automatically, holds the appid between game start and close
 * **Input Text**: `input_text.steam_pending_game_name` — managed automatically, holds the game name while the sync timer is running
+* **Input Text**: `input_text.steam_pending_game_type` — managed automatically, holds the game type between game start and close
 * **Timer**: `timer.steam_playtime_update` — 3 minute timer that fires after a Steam Native game is closed, triggering the playtime sync automation
 
-> ℹ️ The `steam_pending_appid`, `steam_pending_game_name` and `timer.steam_playtime_update` are all managed automatically. You only need to create them — the automations handle the rest.
+> ℹ️ The `steam_pending_appid`, `steam_pending_game_name`, `steam_pending_game_type` and `timer.steam_playtime_update` are all managed automatically. You only need to create them — the automations handle the rest.
 
 3. Sensors & Shell Command
 
