@@ -81,7 +81,7 @@ Go to **Settings > Devices & Services > Helpers** and create these entities:
 * **Input Boolean**: `input_boolean.steam_deck_sessie_actief` (Steam Deck Sessie Actief)
 * **Input Datetime**: `input_datetime.steam_deck_sessie_starttijd` (Steam Deck Sessie Starttijd)
 * **Input Text**: `input_text.steam_deck_huidige_game` (Steam Deck Huidige Game)
-* **Input Text**: `input_text.steam_deck_game_cover_url` (Steam Deck Game Cover URL) — stores the IGDB cover art URL for the currently active game
+* **Input Text**: `input_text.steam_deck_game_cover_url` (Steam Deck Game Cover URL) — stores the cover art URL for the currently active game
 
 **IGDB API (for cover art):**
 * **Input Text**: `input_text.igdb_client_id` — your Twitch/IGDB Client ID
@@ -97,9 +97,10 @@ Go to **Settings > Devices & Services > Helpers** and create these entities:
 * **Input Text**: `input_text.steam_pending_appid` — managed automatically, holds the appid between game start and close
 * **Input Text**: `input_text.steam_pending_game_name` — managed automatically, holds the game name while the sync timer is running
 * **Input Text**: `input_text.steam_pending_game_type` — managed automatically, holds the game type between game start and close
+* **Input Text**: `input_text.steam_pending_image_type` — managed automatically, holds `capsule` or `header` depending on which Steam CDN image is available for the current game
 * **Timer**: `timer.steam_playtime_update` — 3 minute timer that fires after a Steam Native game is closed, triggering the playtime sync automation
 
-> ℹ️ The `steam_pending_appid`, `steam_pending_game_name`, `steam_pending_game_type` and `timer.steam_playtime_update` are all managed automatically. You only need to create them — the automations handle the rest.
+> ℹ️ The `steam_pending_appid`, `steam_pending_game_name`, `steam_pending_game_type`, `steam_pending_image_type` and `timer.steam_playtime_update` are all managed automatically. You only need to create them — the automations handle the rest.
 
 3. Sensors & Shell Command
 
@@ -135,6 +136,8 @@ Create a second new Home Automation, switch to yaml mode and paste in the [`stea
 
 To display game cover art on your dashboard, you need a free IGDB API account. IGDB is owned by Twitch, so authentication goes through the Twitch Developer portal.
 
+> ℹ️ **Cover art sources:** Steam Native games use Steam's own images fetched directly from the Steam CDN using the appid — the automation checks if a high quality capsule image (616x353) is available and falls back to the standard header image (460x215) if not. All other game types (ROMs, non-Steam, ExoDOS) use IGDB for cover art lookup by game name.
+
 ### 3.1 Create a Twitch Developer Application
 
 1. Go to [https://dev.twitch.tv/console](https://dev.twitch.tv/console) and log in with your Twitch account (or create a free one if you don't have one).
@@ -150,12 +153,13 @@ To display game cover art on your dashboard, you need a free IGDB API account. I
 
 ### 3.2 Add the Shell Commands
 
-Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml) into your `shell_commands.yaml` file. This adds two commands:
+Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml) into your `shell_commands.yaml` file. This adds three commands:
 
 - `fetch_igdb_cover` — searches IGDB for a game cover by name
 - `refresh_igdb_token` — calls Twitch to get a new Bearer token when the current one is about to expire
+- `check_steam_image` — checks whether a Steam CDN image URL exists by returning its HTTP status code, used to determine whether to use the capsule or header image for Steam Native games
 
-Both commands receive their credentials as variables from the automation at runtime, so no credentials are hardcoded in the config files.
+All commands receive their parameters as variables from the automation at runtime, so no credentials are hardcoded in the config files.
 
 After adding the shell commands, do a **full Home Assistant restart** — shell commands require a full restart to register.
 
@@ -200,7 +204,7 @@ Then set the values in your helpers:
 
 ### 3.4 Add the Cover Art Automation
 
-This automation triggers whenever the active game sensor changes. Before fetching the cover it checks if the Bearer token is still valid and refreshes it automatically if needed. It fetches the cover from IGDB when a game starts and clears it when the game stops.
+This automation triggers whenever the active game sensor changes. For Steam Native games it checks whether a high quality capsule image is available on the Steam CDN and falls back to the header image if not. For all other game types it checks if the Bearer token is still valid, refreshes it if needed, and fetches the cover from IGDB. When a game stops it clears the cover.
 
 Create a new automation, switch to YAML mode and paste in the [`steam_deck_game_cover.yaml`](./home_assistant/automations/steam_deck_game_cover.yaml) code.
 
