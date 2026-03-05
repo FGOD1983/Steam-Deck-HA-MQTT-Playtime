@@ -4,7 +4,6 @@ triggers:
   - entity_id: sensor.steam_deck_active_game_display
     trigger: state
 actions:
-  - delay: "00:00:02"
   - choose:
       - conditions:
           - condition: template
@@ -12,6 +11,7 @@ actions:
               {{ trigger.to_state.state not in 
                  ['No game opened', 'Offline', 'unavailable', 'unknown', 'none', ''] }}
         sequence:
+          - delay: "00:00:02"
           - if:
               - condition: template
                 value_template: >
@@ -51,6 +51,19 @@ actions:
                   {{ states('sensor.steam_deck_game_type') == 'Steam Native'
                      and states('sensor.steam_deck_appid') not in ['', 'unknown', 'unavailable', 'none'] }}
             then:
+              - variables:
+                  current_appid: "{{ states('sensor.steam_deck_appid') }}"
+              - action: shell_command.check_steam_image
+                data:
+                  url: >-
+                    https://cdn.cloudflare.steamstatic.com/steam/apps/{{
+                    current_appid }}/capsule_616x353.jpg
+                response_variable: image_check
+              - target:
+                  entity_id: input_text.steam_pending_image_type
+                data:
+                  value: "{{ 'capsule' if image_check.stdout == '200' else 'header' }}"
+                action: input_text.set_value
               - target:
                   entity_id: image.steamdeck_active_game_cover
                 action: homeassistant.update_entity
@@ -87,6 +100,11 @@ actions:
         sequence:
           - target:
               entity_id: input_text.steam_deck_game_cover_url
+            data:
+              value: none
+            action: input_text.set_value
+          - target:
+              entity_id: input_text.steam_pending_image_type
             data:
               value: none
             action: input_text.set_value
