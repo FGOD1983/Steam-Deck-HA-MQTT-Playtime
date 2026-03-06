@@ -25,15 +25,16 @@ The system features a Smart Lookup engine that cleans up folder names and fetche
 **🎨 Game Cover Art:** Automatically fetches game cover art from IGDB and displays it on your dashboard.  
 **🔄 Auto Token Refresh:** IGDB Bearer token is automatically refreshed before it expires.  
 **🕹️ Steam Native Playtime Sync:** Official Steam playtime is fetched from the Steam API after each session and used to keep your library accurate.  
+**⚡ Queue-Based Processing:** A persistent Python service handles all playtime calculations in order, preventing data corruption when switching games rapidly.  
 
-By using a Python script on the Steam Deck and a "Session Lock" logic in Home Assistant, your playtime data remains accurate even if Home Assistant reboots during a gaming session.
+By using a Python script on the Steam Deck and a persistent queue processor service in Home Assistant, your playtime data remains accurate even if Home Assistant reboots during a gaming session or you switch games rapidly.
 
 *Note: This system requires an active local network connection between your Steam Deck and your MQTT broker to function.*
 
 ## 🛠 Prerequisites
 * MQTT Broker: A running broker (like Mosquitto) integrated with Home Assistant.  
 * Steam Deck: Access to Desktop Mode and a terminal (Konsole).  
-* Home Assistant Helpers: Several helpers (Boolean, Datetime, Text, and Timer) to manage the session state, IGDB tokens, and Steam playtime sync.
+* Home Assistant Helpers: Several helpers (Boolean, Datetime, Text) to manage the session state, IGDB tokens, cover art and Steam playtime sync.
 
 ## 🎮 [Step 1: Steam Deck Setup](./steam_deck/)
 
@@ -91,24 +92,22 @@ Go to **Settings > Devices & Services > Helpers** and create these entities:
 
 > ℹ️ The `igdb_bearer_token` and `igdb_token_expiry` helpers are automatically updated by the cover art automation whenever the token is close to expiring. You only need to set them manually on first setup (see Step 3.3).
 
-**Steam Native playtime sync:**
+**Steam Native playtime sync & cover art:**
 * **Input Text**: `input_text.steam_api_key` — your Steam Web API key (see Step 4.1)
 * **Input Text**: `input_text.steam_user_id` — your 64-bit Steam ID (see Step 4.1)
 * **Input Text**: `input_text.steam_pending_appid` — managed automatically, holds the appid between game start and close
-* **Input Text**: `input_text.steam_pending_game_name` — managed automatically, holds the game name while the sync timer is running
 * **Input Text**: `input_text.steam_pending_game_type` — managed automatically, holds the game type between game start and close
 * **Input Text**: `input_text.steam_pending_image_type` — managed automatically, holds `capsule` or `header` depending on which Steam CDN image is available for the current game
-* **Timer**: `timer.steam_playtime_update` — 3 minute timer that fires after a Steam Native game is closed, triggering the playtime sync automation
 
-> ℹ️ The `steam_pending_appid`, `steam_pending_game_name`, `steam_pending_game_type`, `steam_pending_image_type` and `timer.steam_playtime_update` are all managed automatically. You only need to create them — the automations handle the rest.
+> ℹ️ The `steam_pending_appid`, `steam_pending_game_type` and `steam_pending_image_type` are all managed automatically. You only need to create them — the automations handle the rest.
 
-3. Sensors & Shell Command
+3. Sensors & Shell Commands
 
-Now we need to build the sensors and the needed shell command for the data. These can be created in the `configuration.yaml` or in their own separate yaml file which should then be included in the `configuration.yaml`.
+Now we need to build the sensors and the needed shell commands for the data. These can be created in the `configuration.yaml` or in their own separate yaml file which should then be included in the `configuration.yaml`.
 
 Let's first do the MQTT sensors inside [`mqtt.yaml`](./home_assistant/sensors/mqtt.yaml). Copy the code inside your Home Assistant mqtt.yaml file.
 
-Next up is the shell command. This can be put inside the `configuration.yaml`. Copy the code from [`the shell_commands.yaml`](./home_assistant/shell_commands.yaml) into the `configuration.yaml` file.
+Next up are the shell commands. Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml) into your `configuration.yaml` or separate shell commands yaml file.
 
 Now let's do the same for the REST Sensor [REST Sensor](./home_assistant/sensors/sensors.yaml). Copy that code into your `sensors.yaml` file.
 
@@ -122,15 +121,56 @@ Use a File Editor or SSH to go to your `/homeassistant/www/` folder (which is ba
 
 Create a file there named `steam_library.json` and copy in the template data from the [`steam_library.json`](./home_assistant/www/steam_library.json) file from this repo.
 
-5. The Core Automations
+5. The Queue Processor Service
 
-**Playtime automation** — this is the "Brain". It manages the session, calculates the time, and triggers the save command. It is reboot-proof: if Home Assistant restarts during a session, the input_boolean ensures the session remains active, and the input_text remembers which game you were playing. For Steam Native games that are properly closed it also starts the sync timer.
+The queue processor is a persistent Python service that runs in the background on your Home Assistant server. It receives game open and close events from HA automations via a local HTTP server, manages a queue file for crash recovery, and handles all playtime calculations and Steam API calls.
 
-Create a new Home Automation, switch to yaml mode and paste in the [`steam_deck_library.yaml`](./home_assistant/automations/steam_deck_library.yaml) code.
+> ℹ️ **Why a queue processor?** When you switch games rapidly on the Steam Deck, the script on the Deck runs every 90 seconds which means it can miss the `No game opened` state between two games. The queue processor detects these swaps, serializes all events and processes them one by one in order, preventing data corruption and ensuring every session is recorded correctly.
 
-**Steam playtime sync automation** — this automation fires when the 3 minute timer finishes after a Steam Native game is closed. It fetches the official total playtime from the Steam API and overwrites the session-tracked value in the library, ensuring your playtime is always accurate. It waits for the main automation to finish before writing to prevent JSON file corruption.
+### 5.1 Create the Scripts Folder
 
-Create a second new Home Automation, switch to yaml mode and paste in the [`steam_deck_native_playtime_update.yaml`](./home_assistant/automations/steam_deck_native_playtime_update.yaml) code.
+Use File Editor or SSH to create the folder `/config/scripts/` if it does not already exist.
+
+### 5.2 Add the Queue Processor Script
+
+Copy [`steam_queue_processor.py`](./home_assistant/scripts/steam_queue_processor.py) into `/config/scripts/steam_queue_processor.py`.
+
+### 5.3 Add the Config File
+
+Copy [`steam_queue_config.json`](./home_assistant/scripts/steam_queue_config.json) into `/config/scripts/steam_queue_config.json` and fill in your values:
+
+```json
+{
+    "ha_token": "your_long_lived_access_token_here",
+    "ha_url": "http://localhost:8123",
+    "queue_file": "/config/steam_queue.json",
+    "library_file": "/config/www/steam_library.json",
+    "port": 8098,
+    "steam_api_delay": 180
+}
+```
+
+To generate a long-lived access token go to your HA **Profile → Security → Long-lived access tokens** and click **Create Token**.
+
+> ℹ️ The service listens on `http://127.0.0.1:8098` by default — only accessible locally, not externally. If port 8098 is already in use on your system you can change it to any free port here and in `shell_commands.yaml`.
+
+### 5.4 Add the Core Automations
+
+**Game opened automation** — triggers when a game starts on the Steam Deck. Waits 2 seconds for MQTT sensors to settle, then posts the game details to the queue processor service and updates the session helpers.
+
+Create a new automation, switch to YAML mode and paste in the [`steam_deck_game_opened.yaml`](./home_assistant/automations/steam_deck_game_opened.yaml) code.
+
+**Game closed automation** — triggers when a game stops. Posts the stop event to the queue processor service with a `properly_closed` flag. This flag is `false` when the sensor reports `offline`, `unavailable` or `unknown` — indicating the Deck went to standby or the script crashed — and `true` for all normal closes. Game swaps (switching directly from one game to another) are detected by the queue processor itself and always treated as properly closed for Steam Native games.
+
+Create a second new automation, switch to YAML mode and paste in the [`steam_deck_game_closed.yaml`](./home_assistant/automations/steam_deck_game_closed.yaml) code.
+
+**Queue processor startup and watchdog automations** — the startup automation launches the queue processor service when HA starts. The watchdog automation checks every 5 minutes if the service is still running and restarts it automatically if it has crashed, sending a persistent notification.
+
+Create two more automations by pasting the [`steam_queue_processor_automations.yaml`](./home_assistant/automations/steam_queue_processor_automations.yaml) code — this file contains both automations, so paste each one separately in YAML mode.
+
+After adding all automations and shell commands do a **full Home Assistant restart**. The startup automation will launch the queue processor automatically.
+
+> ℹ️ You can verify the queue processor is running and inspect the current queue at any time by visiting `http://your-ha-ip:8098/status` or by checking the log at `/config/scripts/steam_queue_processor.log`.
 
 ## 🎨 Step 3: IGDB Game Cover Art Setup
 
@@ -153,11 +193,18 @@ To display game cover art on your dashboard, you need a free IGDB API account. I
 
 ### 3.2 Add the Shell Commands
 
-Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml) into your `shell_commands.yaml` file. This adds three commands:
+Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml) into your `shell_commands.yaml` file. This adds the following commands:
 
+**Cover art:**
 - `fetch_igdb_cover` — searches IGDB for a game cover by name
 - `refresh_igdb_token` — calls Twitch to get a new Bearer token when the current one is about to expire
-- `check_steam_image` — checks whether a Steam CDN image URL exists by returning its HTTP status code, used to determine whether to use the capsule or header image for Steam Native games
+- `check_steam_image` — checks whether a Steam CDN image URL exists, used to determine whether to use the capsule or header image for Steam Native games
+
+**Queue processor:**
+- `post_game_start` — posts a game start event to the queue processor service
+- `post_game_stop` — posts a game stop event to the queue processor service
+- `start_queue_processor` — starts the queue processor service in the background
+- `check_queue_processor` — checks if the queue processor service is running, used by the watchdog automation
 
 All commands receive their parameters as variables from the automation at runtime, so no credentials are hardcoded in the config files.
 
@@ -220,7 +267,7 @@ You can copy them from the templates.yaml file into your own Home Assistant conf
 
 For Steam Native games, the system fetches the official total playtime directly from Steam after each session and uses that to keep your library accurate. This means your playtime in Home Assistant will always match what Steam reports, including any time played on other devices.
 
-> ℹ️ **How it works:** When a Steam Native game is properly closed (not going to standby), the main automation starts a 3 minute timer to give Steam time to update its servers. When the timer finishes a separate automation calls the Steam API, finds the game by appid, and overwrites the session-tracked playtime with the official Steam total. If the Deck goes to standby with a game open, the session time is used as-is since Steam has not updated the playtime yet.
+> ℹ️ **How it works:** When a Steam Native game is properly closed the queue processor waits 3 minutes to give Steam time to update its servers, then calls the Steam API, finds the game by appid, and overwrites the session-tracked playtime with the official Steam total. This applies to both normal closes and game swaps — if you switch directly from one Steam Native game to another the swap is detected and each game gets its own 3 minute Steam API wait. If the Deck goes to standby with a game open, the session time is calculated from the start and stop timestamps and added to the existing playtime instead.
 
 ### 4.1 Get Your Steam API Key and Steam ID
 
@@ -237,15 +284,9 @@ For Steam Native games, the system fetches the official total playtime directly 
 
 > ⚠️ Make sure your Steam profile's **Game details** privacy setting is set to **Public**, otherwise the API will return no data.
 
-### 4.2 Add the Shell Commands
+### 4.2 Shell Commands
 
-Copy the Shell Commands from the shell_commands.yaml to your configuration.yaml or seperate shell commands yaml file in Home Assistant
-
-Do a **full Home Assistant restart** after adding the shell command.
-
-### 4.3 Add the Steam Playtime Sync Automation
-
-Create a new automation, switch to YAML mode and paste in the [`steam_deck_native_playtime_update.yaml`](./home_assistant/automations/steam_deck_native_playtime_update.yaml) code.
+The Steam API calls are handled entirely by the queue processor service — no additional shell commands are needed beyond what was added in Step 3.2. The queue processor reads the Steam API key and Steam user ID directly from the HA helpers via the REST API using the token you configured in the queue processor config file.
 
 ## 📊 Step 5: Visualizing the Data
 
