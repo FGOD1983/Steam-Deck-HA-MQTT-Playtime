@@ -1,0 +1,57 @@
+alias: Steam Deck - Game Closed
+description: >
+  Posts game stop event to the queue processor service and clears session
+  helpers and cover art.
+triggers:
+  - entity_id: sensor.steam_deck_active_game_display
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >
+      {% set sensor = states.sensor.steam_deck_game_playtime %} {{ sensor is not
+      none and sensor.state != 'unavailable' and
+      state_attr('sensor.steam_deck_game_playtime', 'games') is not none }}
+  - condition: state
+    entity_id: input_boolean.steam_deck_sessie_actief
+    state: "on"
+  - condition: template
+    value_template: >
+      {% set ignore = ['unknown', 'unavailable', 'none', 'idle', 'offline', 'not
+      playing', 'no game opened'] %} {{ trigger.to_state.state | lower | trim in
+      ignore }}
+actions:
+  - variables:
+      saved_game_name: "{{ states('input_text.steam_deck_huidige_game') | trim }}"
+      stop_time: "{{ now().isoformat() }}"
+      properly_closed: >
+        {{ trigger.to_state.state | lower | trim not in ['offline',
+        'unavailable', 'unknown'] }}
+  - action: shell_command.post_game_stop
+    data:
+      game_name: "{{ saved_game_name }}"
+      stop_time: "{{ stop_time }}"
+      properly_closed: "{{ properly_closed | lower }}"
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.steam_deck_sessie_actief
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.steam_deck_huidige_game
+    data:
+      value: No game
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.steam_deck_game_cover_url
+    data:
+      value: none
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.steam_pending_image_type
+    data:
+      value: none
+  - action: homeassistant.update_entity
+    target:
+      entity_id: image.steamdeck_active_game_cover
+mode: queued
+max: 10
+

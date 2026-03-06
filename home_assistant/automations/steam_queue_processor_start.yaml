@@ -1,0 +1,11 @@
+alias: Steam Queue Processor - Start
+description: >
+  Starts the Steam queue processor service when Home Assistant starts. The
+  service handles all game session tracking and playtime calculations.
+triggers:
+  - trigger: homeassistant
+    event: start
+actions:
+  - action: shell_command.start_queue_processor
+mode: single
+
