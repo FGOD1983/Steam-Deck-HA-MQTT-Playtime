@@ -1,0 +1,8 @@
+{
+    "ha_token": "your_long_lived_access_token_here",
+    "ha_url": "http://localhost:8123",
+    "queue_file": "/config/steam_queue.json",
+    "library_file": "/config/www/steam_library.json",
+    "port": 8098,
+    "steam_api_delay": 180
+}
