@@ -66,6 +66,14 @@ In order to make it respond correctly at boot or sleep/wake we also need to crea
 Create a file called `.config/systemd/user/steamdeck_mqtt_boot.service` and copy the [boot service code](./steam_deck/services/steamdeck_mqtt_boot.service) into the file.
 Create a file called `.config/systemd/user/steamdeck_mqtt_offline.service` and copy the [offline service code](./steam_deck/services/steamdeck_mqtt_offline.service) into the file.
 
+After creating the files you can enable the services:
+
+```
+systemctl --user enable steamdeck_mqtt_offline.service
+systemctl --user enable steamdeck_mqtt_boot.service
+systemctl --user enable --now steamdeck_mqtt_update.timer
+```
+
 ## 🏠 Step 2: Home Assistant Setup
 
 This part of the setup handles the incoming data, manages the session logic, and ensures everything is saved correctly to a local JSON database.
