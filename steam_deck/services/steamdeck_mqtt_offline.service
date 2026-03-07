@@ -8,3 +8,6 @@ Type=oneshot
 ExecStart=/home/deck/mqtt-env/bin/python /home/deck/scripts/steamdeck_mqtt_sensors.py --offline
 StandardOutput=journal
 StandardError=journal
+
+[Install]
+WantedBy=default.target
