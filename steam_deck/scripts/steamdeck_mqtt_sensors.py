@@ -100,12 +100,12 @@ def build_acf_cache():
 # ===========================
 
 def parse_shortcuts_vdf(vdf_path):
-    
+
     """
     Parse Steam's binary shortcuts.vdf.
     Returns dict keyed by runtime SteamGameId and lowercased app name.
     """
-    
+
     shortcuts = {}
     try:
         with open(vdf_path, "rb") as f:
@@ -172,7 +172,7 @@ SHORTCUTS_CACHE = build_shortcuts_cache()
 def get_steam_appid_from_env(pid):
 
     """Read SteamGameId or SteamAppId from /proc/<pid>/environ."""
-    
+
     try:
         with open(f"/proc/{pid}/environ", "rb") as f:
             env = f.read().decode("utf-8", errors="replace")
@@ -204,7 +204,7 @@ def is_steam_native_appid(appid):
     Real Steam appids are < 0x80000000 (2147483648).
     Shortcut fake appids are >= 0x80000000.
     """
-    
+
     if not appid:
         return False
     try:
@@ -303,7 +303,7 @@ def resolve_game_title(raw_name, appid=None):
       6. RAWG
       7. Cleaned name fallback
     """
-    
+
     cache_data = {}
     if os.path.exists(CACHE_PATH):
         try:
@@ -454,7 +454,7 @@ def detect_game():
                             'time':      proc.info['create_time'],
                         })
                 continue  # never process reaper further regardless
-                
+
             # ── Priority 1: eXoDOS game detection ──
             # Must be checked BEFORE ignore_list since the game name is only visible
             # in the bash/konsole cmdline that launches the .bsh file, and both are
@@ -468,9 +468,9 @@ def detect_game():
             )
             if exo_match:
                 raw_title = exo_match.group(1)
-                
+
                 # Skip if this is the ExoDOS launcher itself (exogui.command)
-                
+
                 if "exogui" not in raw_title.lower():
                     title = re.sub(r'\s*\(\d{4}\)\s*', ' ', raw_title).strip()
                     possible_matches.append({
@@ -491,8 +491,19 @@ def detect_game():
             # ── Steam native games (real appid in ACF) ──
 
             if appid and appid in ACF_CACHE and is_steam_native_appid(appid):
+                # Check game_cache.json first so user can override Steam Native names
+                cache_data = {}
+                if os.path.exists(CACHE_PATH):
+                    try:
+                        with open(CACHE_PATH, 'r') as f:
+                            content = f.read().strip()
+                            if content:
+                                cache_data = json.loads(content)
+                    except Exception as e:
+                        print_log(f"Cache read error (Steam Native override): {e}")
+                title = cache_data.get(appid) or ACF_CACHE[appid]
                 possible_matches.append({
-                    'title':     ACF_CACHE[appid],
+                    'title':     title,
                     'appid':     appid,
                     'game_type': "Steam Native",
                     'resolved':  True,
@@ -502,7 +513,7 @@ def detect_game():
                 continue
 
             # ── Non-Steam shortcuts (fake appid in shortcuts cache) ──
-            
+
             if appid and appid in SHORTCUTS_CACHE:
                 possible_matches.append({
                     'title':     SHORTCUTS_CACHE[appid],
@@ -536,7 +547,7 @@ def detect_game():
                 continue
 
             # ── Path-based detection (fallback) ──
-            
+
             is_steam_or_exe = "steamapps/common" in full_cmd_lower or ".exe" in full_cmd_lower
             is_linux_native = not is_steam_or_exe and any(
                 p in full_cmd_lower for p in ["/games/", "/applications/", "/run/media/"]
@@ -648,7 +659,7 @@ def run_update(offline_mode=False):
             write_trace("OFFLINE SIGNAL", "None", 0, "Status")
         else:
             # ── Network Info & Docked Status Logic ──
-            # We check if ethernet is connected. 
+            # We check if ethernet is connected.
             # Since the Steam Deck has no native ethernet, this implies a dock is used.
             eth_check = get_output("nmcli -t -f TYPE,STATE dev | grep 'ethernet:connected'")
             is_docked = "Docked" if eth_check else "Undocked"
@@ -689,3 +700,4 @@ def run_update(offline_mode=False):
 
 if __name__ == "__main__":
     run_update(offline_mode="--offline" in sys.argv)
+
