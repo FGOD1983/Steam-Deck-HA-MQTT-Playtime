@@ -1,13 +1,17 @@
 [Unit]
 Description=Steam Deck MQTT update at boot or resume
 After=default.target
+After=sleep.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/home/deck/mqtt-env/bin/python /home/deck/scripts/steamdeck_mqtt_sensors.py --boot
+ExecStart=/home/deck/mqtt-env/bin/python /home/deck/scripts/steamdeck_mqtt_sensors.py
+ExecStartPost=/usr/bin/systemctl --user stop steamdeck_mqtt_update.timer
+ExecStartPost=/usr/bin/systemctl --user start steamdeck_mqtt_update.timer
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=default.target
+WantedBy=sleep.target
