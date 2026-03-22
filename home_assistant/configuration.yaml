@@ -3,3 +3,6 @@ homeassistant:
     - "/config/www"
     - "/config/www/"
 
+frontend:
+  extra_module_url:
+    - /local/hass-fgod-icons.js
