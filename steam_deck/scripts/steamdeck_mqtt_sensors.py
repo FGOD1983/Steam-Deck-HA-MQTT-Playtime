@@ -491,19 +491,8 @@ def detect_game():
             # ── Steam native games (real appid in ACF) ──
 
             if appid and appid in ACF_CACHE and is_steam_native_appid(appid):
-                # Check game_cache.json first so user can override Steam Native names
-                cache_data = {}
-                if os.path.exists(CACHE_PATH):
-                    try:
-                        with open(CACHE_PATH, 'r') as f:
-                            content = f.read().strip()
-                            if content:
-                                cache_data = json.loads(content)
-                    except Exception as e:
-                        print_log(f"Cache read error (Steam Native override): {e}")
-                title = cache_data.get(appid) or ACF_CACHE[appid]
                 possible_matches.append({
-                    'title':     title,
+                    'title':     ACF_CACHE[appid],
                     'appid':     appid,
                     'game_type': "Steam Native",
                     'resolved':  True,
@@ -664,10 +653,13 @@ def run_update(offline_mode=False):
             eth_check = get_output("nmcli -t -f TYPE,STATE dev | grep 'ethernet:connected'")
             is_docked = "Docked" if eth_check else "Undocked"
 
-            # Get Network Name (SSID if on wifi, otherwise 'Wired Ethernet')
-            network_name = get_output("nmcli -t -f ACTIVE,SSID dev wifi | grep '^yes' | cut -d':' -f2")
-            if not network_name:
-                network_name = "Wired Ethernet" if eth_check else "Disconnected"
+            # Get Network Name — ethernet takes priority over WiFi when docked
+            if eth_check:
+                network_name = "Ethernet"
+            else:
+                network_name = get_output("nmcli -t -f ACTIVE,SSID dev wifi | grep '^yes' | cut -d':' -f2")
+                if not network_name:
+                    network_name = "Disconnected"
 
             battery = get_output(
                 "upower -i /org/freedesktop/UPower/devices/battery_BAT1 "
@@ -700,4 +692,3 @@ def run_update(offline_mode=False):
 
 if __name__ == "__main__":
     run_update(offline_mode="--offline" in sys.argv)
-
