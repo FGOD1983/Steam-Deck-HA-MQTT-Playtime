@@ -298,10 +298,23 @@ The Steam API calls are handled entirely by the queue processor service — no a
 
 ## 📊 Step 5: Visualizing the Data
 
-To read the data back into Home Assistant for your dashboard, you can use 2 cards. The first one I use is the picture card which uses [`steamdeck.png`](./home_assistant/www/steamdeck.png). You will need to upload this file into your `www` folder where you also created the `steam_library.json` file.
+The dashboard card uses a custom Steam Deck icon set for the dock status. You need to install this before adding the card.
+
+### 5.1 Install the Custom Icon Set
+
+1. Copy [`hass-fgod-icons.js`](./home_assistant/www/hass-fgod-icons.js) into your `/config/www/` folder.
+2. Add the [`configuration.yaml`](./home_assistant/configuration.yaml) code to your configuration.yaml file.
+
+3. Do a **full Home Assistant restart** after adding this.
+
+> ℹ️ Without the icon set the dock status icons will not display correctly on the dashboard card.
+
+### 5.2 Add the Dashboard Cards
+
+The first card uses [`steamdeck.png`](./home_assistant/www/steamdeck.png) as the background image. Copy this file into your `/config/www/` folder alongside `steam_library.json`.
 
 When that is done you can go to your dashboard and create a new card with the [`picture_card.yaml`](./home_assistant/dashboard/picture_card.yaml) code.
 
-The second card I use is the Markdown card which displays the top 5 most played games with their total playtime and the last 5 played games with their day and time they have been played last.
+The second card is a Markdown card which displays the top 5 most played games with their total playtime and the last 5 played games with their day and time they were last played.
 
-You can again create a new card on your dashboard and copy the [`markdown_card.yaml`](./home_assistant/dashboard/markdown_card.yaml) code into the card yaml.
+Create a new card on your dashboard and copy the [`markdown_card.yaml`](./home_assistant/dashboard/markdown_card.yaml) code into the card yaml.
