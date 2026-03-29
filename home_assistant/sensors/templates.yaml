@@ -90,8 +90,10 @@
         {% set val = states('sensor.steam_deck_charging') %}
         {% if val in ['unavailable', 'unknown', 'none'] %}
           {{''}}
-        {% elif val == 'Pending-charge' %}
-          Charged
+        {% elif val in ['Pending-charge'] %}
+          Battery Protection
+        {% elif val in ['Fully-charged'] %}
+          Fully-charged
         {% else %}
           {{ val }}
         {% endif %}
@@ -101,12 +103,16 @@
           mdi:battery-remove-outline
         {% elif val == 'Charging' %}
           mdi:battery-charging
-        {% elif val == 'Pending-charge' %}
-          mdi:power-plug-battery-outline
-        {% else %}
+        {% elif val in ['Pending-charge'] %}
+          mdi:battery-heart
+        {% elif val in ['Fully-charged'] %}
+          mdi:battery-check
+        {% elif val == 'Discharging' %}
           mdi:battery-arrow-down-outline
+        {% else %}
+          mdi:battery-remove-outline
         {% endif %}
-
+        
     # 🎮 Active Game Sensor
     - name: "Steam Deck Active Game Display"
       unique_id: steam_deck_active_game_display
