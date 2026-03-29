@@ -30,7 +30,7 @@ cards:
                     background: rgba(0,0,0,
                       {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
                          and states('sensor.steam_deck_cover_url').startswith('http') %}
-                        0.6
+                        0.5
                       {% else %}
                         1.0
                       {% endif %}
@@ -170,7 +170,7 @@ cards:
             - type: custom:button-card
               entity: sensor.steam_deck_charging_display
               style:
-                top: 60%
+                top: 58%
                 left: 67%
                 transform: translateX(-50%)
               show_name: false
@@ -185,8 +185,9 @@ cards:
                       [[[
                         var s = states['sensor.steam_deck_charging_display'].state;
                         if (!s || s === 'unknown' || s === 'unavailable') return 'grey';
-                        if (s === 'Charged') return 'green';
+                        if (s === 'Fully-charged') return 'green';
                         if (s === 'Charging') return 'deepskyblue';
+                        if (s === 'Battery Protection') return 'mediumpurple';
                         if (s === 'Discharging') return 'orange';
                         return 'grey';
                       ]]]
@@ -257,7 +258,7 @@ cards:
                     background: rgba(0,0,0,
                       {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
                          and states('sensor.steam_deck_cover_url').startswith('http') %}
-                        0.6
+                        0.5
                       {% else %}
                         1.0
                       {% endif %}
@@ -412,8 +413,9 @@ cards:
                       [[[
                         var s = states['sensor.steam_deck_charging_display'].state;
                         if (!s || s === 'unknown' || s === 'unavailable') return 'grey';
-                        if (s === 'Charged') return 'green';
+                        if (s === 'Fully-charged') return 'green';
                         if (s === 'Charging') return 'deepskyblue';
+                        if (s === 'Battery Protection') return 'mediumpurple';
                         if (s === 'Discharging') return 'orange';
                         return 'grey';
                       ]]]
@@ -454,3 +456,4 @@ cards:
                     line-height: 1.1;
                     padding-top: 0.3em;
                       }
+                      
