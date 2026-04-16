@@ -2,7 +2,8 @@
 """
 Steam Deck Queue Processor
 A persistent background service that handles game session tracking,
-playtime calculation and Steam API sync for the Steam Deck HA integration.
+playtime calculation, Steam API sync and InfluxDB recording for the
+Steam Deck HA integration.
 
 Runs as a background process on Home Assistant OS, started by a HA automation
 on homeassistant_start and monitored by a watchdog automation every 5 minutes.
@@ -16,6 +17,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -36,9 +38,13 @@ config = {}
 
 def load_config():
     global config
-    with open(CONFIG_FILE, 'r') as f:
-        config = json.load(f)
-    log.info('Config loaded')
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+        log.info('Config loaded')
+    except Exception as e:
+        log.error(f"Failed to load config: {e}")
+        exit(1)
 
 # ── Queue file helpers ─────────────────────────────────────────────────────────
 queue_file_lock = threading.Lock()
@@ -127,24 +133,49 @@ def write_library(games):
     os.replace(tmp_path, path)
     log.info('Library file updated')
 
-def update_library_entry(game_name, new_seconds, last_played):
-    """Update a single game entry in the library under lock."""
+def update_library_entry(game_name, new_seconds, start_time, stop_time):
+    """
+    Update a single game entry in the library under lock.
+    - start_time: ISO string of when this session started — used as first_played
+                  for new games and as last_played in the library
+    - stop_time:  ISO string of when this session ended — stored as last_played
+    - first_played is set to start_time for new games, or kept from existing entry
+    - session_count increments by 1 each session, starts at 1 for new games
+    Returns the updated entry dict for use in InfluxDB write.
+    """
     with library_file_lock:
         games = read_library()
 
         # Case-insensitive match for existing entry
         matched_key = game_name
+        existing_entry = {}
         for key in games.keys():
             if key.lower() == game_name.lower():
                 matched_key = key
+                existing_entry = games[key] if isinstance(games[key], dict) else {}
                 break
 
-        games[matched_key] = {
+        # first_played: use existing value if present, otherwise use start_time
+        # of this session (the actual moment the game was started)
+        first_played = existing_entry.get('first_played')
+        if not first_played:
+            # For existing games without first_played, fall back to their
+            # existing last_played, otherwise use this session's start_time
+            first_played = existing_entry.get('last_played', start_time)
+
+        # Increment session count — start at 1 if not present
+        session_count = existing_entry.get('session_count', 0) + 1
+
+        updated_entry = {
             'seconds': round(new_seconds, 2),
-            'last_played': last_played
+            'session_count': session_count,
+            'first_played': first_played,
+            'last_played': start_time
         }
+        games[matched_key] = updated_entry
         write_library(games)
-        log.info(f'Updated library entry for {matched_key}: {round(new_seconds)}s')
+        log.info(f'Updated library entry for {matched_key}: {round(new_seconds)}s | sessions={session_count}')
+        return updated_entry
 
 def get_existing_seconds(game_name):
     """Get existing playtime seconds for a game, 0 if not found."""
@@ -156,12 +187,79 @@ def get_existing_seconds(game_name):
             return float(value)
     return 0.0
 
+# ── InfluxDB helpers ───────────────────────────────────────────────────────────
+def escape_influx_tag(value):
+    """Escape special characters in InfluxDB tag values."""
+    return str(value).replace(',', r'\,').replace(' ', r'\ ').replace('=', r'\=')
+
+def escape_influx_string_field(value):
+    """Escape string field values for InfluxDB line protocol."""
+    return str(value).replace('"', r'\"')
+
+def write_to_influxdb(game_name, appid, game_type, total_seconds, session_seconds,
+                       session_count, first_played, last_played, start_time_dt):
+    """
+    Write a playtime data point to InfluxDB using the line protocol.
+    Tags: game, game_type, appid
+    Fields: total_seconds, session_seconds, session_count, first_played, last_played
+    Timestamp: start_time of the session (nanoseconds)
+    """
+    influxdb_url = config.get('influxdb_url')
+    influxdb_db = config.get('influxdb_db')
+    influxdb_user = config.get('influxdb_user', '')
+    influxdb_password = config.get('influxdb_password', '')
+
+    if not influxdb_url or not influxdb_db:
+        log.warning('InfluxDB not configured, skipping write')
+        return
+
+    # Convert start_time to nanoseconds timestamp for InfluxDB
+    timestamp_ns = int(start_time_dt.timestamp() * 1_000_000_000)
+
+    # Build line protocol string
+    tag_game = escape_influx_tag(game_name)
+    tag_game_type = escape_influx_tag(game_type)
+    tag_appid = escape_influx_tag(appid if appid else '')
+
+    field_first_played = escape_influx_string_field(first_played)
+    field_last_played = escape_influx_string_field(last_played)
+
+    line = (
+        f'playtime,'
+        f'game={tag_game},'
+        f'game_type={tag_game_type},'
+        f'appid={tag_appid} '
+        f'total_seconds={round(total_seconds, 2)},'
+        f'session_seconds={round(session_seconds, 2)},'
+        f'session_count={session_count}i,'
+        f'first_played="{field_first_played}",'
+        f'last_played="{field_last_played}" '
+        f'{timestamp_ns}'
+    )
+
+    try:
+        params = urllib.parse.urlencode({
+            'db': influxdb_db,
+            'u': influxdb_user,
+            'p': influxdb_password
+        })
+        url = f'{influxdb_url}/write?{params}'
+        req = urllib.request.Request(
+            url,
+            data=line.encode('utf-8'),
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 204:
+                log.info(f'InfluxDB write successful for {game_name}')
+            else:
+                log.warning(f'InfluxDB write returned unexpected status {resp.status}')
+    except Exception as e:
+        log.error(f'InfluxDB write failed for {game_name}: {e}')
+
 # ── Steam API helpers ──────────────────────────────────────────────────────────
 def fetch_steam_playtime(appid):
-    """
-    Fetch official total playtime in seconds from Steam API for a given appid.
-    Returns None if not found or on error.
-    """
+    """Fetch official total playtime in seconds from Steam API for a given appid."""
     api_key = get_steam_api_key()
     steam_id = get_steam_user_id()
 
@@ -182,14 +280,14 @@ def fetch_steam_playtime(appid):
             for game in games:
                 if game.get('appid') == int(appid):
                     minutes = game.get('playtime_forever', 0)
-                    return minutes * 60  # convert to seconds
+                    return minutes * 60
     except Exception as e:
         log.error(f'Error fetching Steam playtime: {e}')
     return None
 
 # ── Processing logic ───────────────────────────────────────────────────────────
 def process_stop_entry(entry):
-    """Process a stop entry — calculate or fetch playtime and update library."""
+    """Process a stop entry — calculate or fetch playtime, update library and write to InfluxDB."""
     game_name = entry['game_name']
     appid = entry.get('appid', '')
     game_type = entry.get('game_type', '')
@@ -200,34 +298,62 @@ def process_stop_entry(entry):
 
     log.info(f'Processing stop: {game_name} | type={game_type} | properly_closed={properly_closed}')
 
+    session_seconds = (stop_time - start_time).total_seconds()
+
     if game_type == 'Steam Native' and properly_closed:
-        # Properly closed Steam Native game — wait for Steam servers to update
-        # then fetch official playtime. This covers both normal closes and game
-        # swaps, since a swap means the game was properly closed on the Deck but
-        # the script missed the No game opened state in between.
         delay = config.get('steam_api_delay', 180)
         log.info(f'Waiting {delay}s for Steam API to update for {game_name}...')
         time.sleep(delay)
 
         steam_seconds = fetch_steam_playtime(appid)
         if steam_seconds is not None:
-            update_library_entry(game_name, steam_seconds, start_time.isoformat())
+            updated = update_library_entry(
+                game_name, steam_seconds,
+                start_time=start_time.isoformat(),
+                stop_time=stop_time.isoformat()
+            )
             log.info(f'Steam API playtime for {game_name}: {steam_seconds}s')
         else:
-            # Fall back to session calculation if Steam API fails
             log.warning(f'Steam API fetch failed for {game_name}, falling back to session calculation')
-            session_seconds = (stop_time - start_time).total_seconds()
             existing_seconds = get_existing_seconds(game_name)
-            update_library_entry(game_name, existing_seconds + session_seconds, start_time.isoformat())
+            new_seconds = existing_seconds + session_seconds
+            updated = update_library_entry(
+                game_name, new_seconds,
+                start_time=start_time.isoformat(),
+                stop_time=stop_time.isoformat()
+            )
+
+        write_to_influxdb(
+            game_name=game_name,
+            appid=appid,
+            game_type=game_type,
+            total_seconds=updated['seconds'],
+            session_seconds=session_seconds,
+            session_count=updated['session_count'],
+            first_played=updated['first_played'],
+            last_played=updated['last_played'],
+            start_time_dt=start_time
+        )
     else:
-        # Non-Steam Native or went to standby/offline — calculate from timestamps.
-        # Steam Native games only reach here if properly_closed=False, meaning the
-        # Deck went to standby or the script crashed with the game open.
-        session_seconds = (stop_time - start_time).total_seconds()
         existing_seconds = get_existing_seconds(game_name)
         new_seconds = existing_seconds + session_seconds
-        update_library_entry(game_name, new_seconds, start_time.isoformat())
+        updated = update_library_entry(
+            game_name, new_seconds,
+            start_time=start_time.isoformat(),
+            stop_time=stop_time.isoformat()
+        )
         log.info(f'Session playtime for {game_name}: {session_seconds}s added to {existing_seconds}s existing')
+        write_to_influxdb(
+            game_name=game_name,
+            appid=appid,
+            game_type=game_type,
+            total_seconds=new_seconds,
+            session_seconds=session_seconds,
+            session_count=updated['session_count'],
+            first_played=updated['first_played'],
+            last_played=updated['last_played'],
+            start_time_dt=start_time
+        )
 
     remove_from_queue_file(entry_id)
 
@@ -237,7 +363,6 @@ def process_queue_entry(entry):
     if state == 'stop':
         process_stop_entry(entry)
     elif state == 'start':
-        # Start entries are persisted for crash recovery but need no processing
         log.info(f'Start entry for {entry["game_name"]} acknowledged, no processing needed')
     else:
         log.warning(f'Unknown entry state: {state}')
@@ -312,15 +437,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             for existing in entries:
                 if existing.get('state') == 'start' and existing.get('stop_time') is None:
                     log.info(f'Game swap detected — synthesizing stop for {existing["game_name"]}')
-                    log.debug(f'Swap entry full dump: {json.dumps(existing)}')
-                    log.info(f'Swap entry game_type: "{existing.get("game_type")}" | repr: {repr(existing.get("game_type"))} | properly_closed will be: {existing.get("game_type") == "Steam Native"}')
                     stop_entry = dict(existing)
                     stop_entry['state'] = 'stop'
                     stop_entry['stop_time'] = data['start_time']
-                    # Steam Native: properly closed, script just missed the transition
-                    # Non-Steam: use session calculation
                     stop_entry['properly_closed'] = existing.get('game_type') == 'Steam Native'
-                    log.info(f'Stop entry properly_closed set to: {stop_entry["properly_closed"]}')
                     entries = [e for e in entries if e.get('entry_id') != existing['entry_id']]
                     entries.append(stop_entry)
                     write_queue_file(entries)
@@ -407,7 +527,7 @@ def main():
     class ReusableHTTPServer(HTTPServer):
         allow_reuse_address = True
 
-    port = config.get('port', 8099)
+    port = config.get('port', 8098)
     server = ReusableHTTPServer(('127.0.0.1', port), RequestHandler)
     log.info(f'Steam queue processor listening on http://127.0.0.1:{port}')
 
@@ -419,4 +539,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
