@@ -145,18 +145,9 @@ Copy [`steam_queue_processor.py`](./home_assistant/scripts/steam_queue_processor
 
 ### 5.3 Add the Config File
 
-Copy [`steam_queue_config.json`](./home_assistant/scripts/steam_queue_config.json) into `/config/scripts/steam_queue_config.json` and fill in your values:
+Copy [`steam_queue_config.json`](./home_assistant/scripts/steam_queue_config_without_InfluxDB.json) into `/config/scripts/steam_queue_config.json` and fill in your values for ha_token and ha_url.
 
-```json
-{
-    "ha_token": "your_long_lived_access_token_here",
-    "ha_url": "http://localhost:8123",
-    "queue_file": "/config/steam_queue.json",
-    "library_file": "/config/www/steam_library.json",
-    "port": 8098,
-    "steam_api_delay": 180
-}
-```
+If you want to use the setup with InfluxDB and Grafana, you will need to copy [`steam_queue_config.json`](./home_assistant/scripts/steam_queue_config_with_InfluxDB.json) into `/config/scripts/steam_queue_config.json` instead and fill in ha_roken, ha_url, influxdb_db (if you created it with another name), influxdb_user and influxdb_password.
 
 To generate a long-lived access token go to your HA **Profile → Security → Long-lived access tokens** and click **Create Token**.
 
@@ -304,7 +295,6 @@ The dashboard card uses a custom Steam Deck icon set for the dock status. You ne
 
 1. Copy [`hass-fgod-icons.js`](./home_assistant/www/hass-fgod-icons.js) into your `/config/www/` folder.
 2. Add the [`configuration.yaml`](./home_assistant/configuration.yaml) code to your configuration.yaml file.
-
 3. Do a **full Home Assistant restart** after adding this.
 
 > ℹ️ Without the icon set the dock status icons will not display correctly on the dashboard card.
@@ -318,3 +308,87 @@ When that is done you can go to your dashboard and create a new card with the [`
 The second card is a Markdown card which displays the top 5 most played games with their total playtime and the last 5 played games with their day and time they were last played.
 
 Create a new card on your dashboard and copy the [`markdown_card.yaml`](./home_assistant/dashboard/markdown_card.yaml) code into the card yaml.
+
+## 📈 Step 6: InfluxDB & Grafana (Optional)
+
+This step is fully optional. If you skip it the rest of the system works exactly as described above. InfluxDB enables long-term time-series storage of your playtime data, and Grafana provides rich dashboards for visualizing it — top games, weekly playtime, session counts and more.
+
+> ℹ️ The queue processor will silently skip InfluxDB writes if the InfluxDB settings are not present in `steam_queue_config.json`. No errors, no impact on normal operation.
+
+### 6.1 Install the Apps
+
+Both add-ons are available directly from the Home Assistant add-on store.
+
+1. Go to **Settings → Apps → Install apps**
+2. Search for and install **InfluxDB**
+3. Search for and install **Grafana**
+4. Start both add-ons and enable **Start on boot** and **Watchdog** for each
+
+### 6.2 Set Up InfluxDB
+
+1. On the InfluxDB apps page click **Open Web UI**
+2. Click the **InfluxDB Admin** icon (crown) in the left menu
+3. On the **Databases** tab create a database called `steamdeck`
+4. On the **Users** tab create a user (e.g. `steamdeck`) and give it **ALL** permissions on the `steamdeck` database
+
+Alternatively create the database via the terminal:
+
+```bash
+curl -s -X POST "http://localhost:8086/query?u=YOUR_USER&p=YOUR_PASSWORD" \
+  --data-urlencode "q=CREATE DATABASE steamdeck"
+```
+
+Verify it was created:
+
+```bash
+curl -s -X POST "http://localhost:8086/query?u=YOUR_USER&p=YOUR_PASSWORD" \
+  --data-urlencode "q=SHOW DATABASES"
+```
+
+### 6.3 Update the Queue Processor Config
+
+As mentioned in 5.3, use the config file with the InfluxDB settings included and fill in the needed values for the variables.
+
+Restart the queue processor after saving — either via the watchdog automation or by triggering the startup automation from Developer Tools.
+
+### 6.4 What Gets Stored in InfluxDB
+
+After each gaming session the queue processor writes a data point to the `playtime` measurement with the following data:
+
+**Tags** (indexed, used for filtering):
+- `game` — game name
+- `game_type` — Steam Native, Non-Steam, ROM, ExoDOS
+- `appid` — Steam appid (empty for non-Steam games)
+
+**Fields** (the actual values):
+- `total_seconds` — total playtime in seconds after this session
+- `session_seconds` — duration of this session in seconds
+- `session_count` — running total of how many times this game has been played
+- `first_played` — timestamp of the first ever recorded session
+- `last_played` — timestamp of when this session ended
+
+**Timestamp** — set to the start time of the session.
+
+### 6.5 Set Up Grafana
+
+1. On the Grafana add-on page click **Open Web UI**
+2. Log in with the default credentials (`admin` / `admin`) and set a new password
+3. Go to **Connections → Data Sources → Add data source**
+4. Select **InfluxDB**
+5. Set the URL to `http://a0d7b954-influxdb:8086`
+6. Set the database to `steamdeck`, add your InfluxDB username and password and HTTP Method to GET
+7. Click **Save & Test** — it should confirm the connection is working
+
+### 6.6 Create the Dashboard
+
+In Grafana go to **Dashboards → New → New Dashboard** and create your own panels. Here are some examples of what I made:
+
+
+[`**Panel 1 — Top 10 Total Playtime:**`](./home_assistant/Grafana/panel_1.json)
+
+[`**Panel 2 — Time Played Past 7 Days:**`](./home_assistant/Grafana/panel_2.json)
+
+[`**Panel 3 — Top 10 Games Past 7 Days:**`](./home_assistant/Grafana/panel_3.json)
+
+[`**Panel 4 — Top 10 Games All Time:**`](./home_assistant/Grafana/panel_4.json)
+
