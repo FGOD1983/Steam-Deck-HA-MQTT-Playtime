@@ -1,0 +1,116 @@
+{
+  "id": 5,
+  "type": "bargauge",
+  "title": "Time Played (Past 7 Days)",
+  "gridPos": {
+    "x": 0,
+    "y": 8,
+    "h": 8,
+    "w": 12
+  },
+  "fieldConfig": {
+    "defaults": {
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "semi-dark-orange",
+            "value": null
+          },
+          {
+            "color": "dark-green",
+            "value": 3
+          }
+        ]
+      },
+      "decimals": 2,
+      "displayName": "${__field.labels.game}",
+      "unit": "h"
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Grand Total"
+        },
+        "properties": [
+          {
+            "id": "displayName",
+            "value": "Weekly Total"
+          }
+        ]
+      }
+    ]
+  },
+  "transformations": [
+    {
+      "id": "reduce",
+      "options": {
+        "labelsToFields": false,
+        "mode": "seriesToRows",
+        "reducers": [
+          "last"
+        ]
+      }
+    },
+    {
+      "id": "sortBy",
+      "options": {
+        "sort": [
+          {
+            "desc": true,
+            "field": "Last"
+          }
+        ]
+      }
+    }
+  ],
+  "pluginVersion": "12.3.0",
+  "targets": [
+    {
+      "alias": "$tag_game",
+      "hide": false,
+      "query": "SELECT sum(\"session_seconds\") / 3600 FROM \"steamdeck\".\"autogen\".\"playtime\" WHERE time > now() - 7d GROUP BY \"game\"",
+      "rawQuery": true,
+      "refId": "A",
+      "resultFormat": "time_series"
+    },
+    {
+      "alias": "Grand Total",
+      "hide": false,
+      "query": "SELECT sum(\"session_seconds\") / 3600 AS \"Grand Total\" FROM \"steamdeck\".\"autogen\".\"playtime\" WHERE time > now() - 7d",
+      "rawQuery": true,
+      "refId": "B",
+      "resultFormat": "time_series"
+    }
+  ],
+  "datasource": {
+    "type": "influxdb",
+    "uid": "ffj5j02qepfcwc"
+  },
+  "options": {
+    "reduceOptions": {
+      "values": true,
+      "calcs": [
+        "sum"
+      ],
+      "fields": ""
+    },
+    "orientation": "horizontal",
+    "legend": {
+      "showLegend": false,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "displayMode": "gradient",
+    "valueMode": "color",
+    "namePlacement": "auto",
+    "showUnfilled": true,
+    "sizing": "auto",
+    "minVizWidth": 8,
+    "minVizHeight": 16,
+    "maxVizHeight": 300
+  }
+}
