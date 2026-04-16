@@ -38,7 +38,7 @@ By using a Python script on the Steam Deck and a persistent queue processor serv
 
 ## 🎮 [Step 1: Steam Deck Setup](./steam_deck/)
 
-1. Install dependencies
+### 1.1 Install dependencies
 
 Open Konsole in Desktop Mode and run the following to prepare the environment:
 
@@ -51,11 +51,11 @@ python -m venv ~/mqtt-env
 ~/mqtt-env/bin/pip install paho-mqtt requests psutil
 ```
 
-2. Create the Script
+### 1.2 Create the Script
 
 Create a file called `/home/deck/scripts/steamdeck_mqtt_sensors.py` and paste the provided [Python script](./steam_deck/scripts/steamdeck_mqtt_sensors.py). Don't forget to edit variables at the beginning of the script (MQTT_HOST, MQTT_USER, MQTT_PASS).
 
-3. Auto-start with Systemd
+### 1.3 Auto-start with Systemd
 
 Create a file called `.config/systemd/user/steamdeck_mqtt_update.service` and copy the [update service code](./steam_deck/services/steamdeck_mqtt_update.service) into the file.
 
@@ -78,11 +78,11 @@ systemctl --user enable --now steamdeck_mqtt_update.timer
 
 This part of the setup handles the incoming data, manages the session logic, and ensures everything is saved correctly to a local JSON database.
 
-1. Enable File Writing
+### 2.1 Enable File Writing
 
 To allow Home Assistant to write to your local storage, add [the following code](./home_assistant/configuration.yaml) to your `configuration.yaml`. This is required for the `shell_command` to work.
 
-2. Create Helpers (UI)
+### 2.2 Create Helpers (UI)
 
 Go to **Settings > Devices & Services > Helpers** and create these entities:
 
@@ -109,7 +109,7 @@ Go to **Settings > Devices & Services > Helpers** and create these entities:
 
 > ℹ️ The `steam_pending_appid`, `steam_pending_game_type` and `steam_pending_image_type` are all managed automatically. You only need to create them — the automations handle the rest.
 
-3. Sensors & Shell Commands
+### 2.3 Sensors & Shell Commands
 
 Now we need to build the sensors and the needed shell commands for the data. These can be created in the `configuration.yaml` or in their own separate yaml file which should then be included in the `configuration.yaml`.
 
@@ -121,7 +121,7 @@ Now let's do the same for the REST Sensor [REST Sensor](./home_assistant/sensors
 
 And for the last sensors, you will need to copy the [`templates.yaml`](./home_assistant/sensors/templates.yaml) file content to your `templates.yaml` file on Home Assistant.
 
-4. The Library Database (JSON)
+### 2.4 The Library Database (JSON)
 
 For the system to store your data, you need to create an initial empty library file.
 
@@ -129,21 +129,21 @@ Use a File Editor or SSH to go to your `/homeassistant/www/` folder (which is ba
 
 Create a file there named `steam_library.json` and copy in the template data from the [`steam_library.json`](./home_assistant/www/steam_library.json) file from this repo.
 
-5. The Queue Processor Service
+### 2.5 The Queue Processor Service
 
 The queue processor is a persistent Python service that runs in the background on your Home Assistant server. It receives game open and close events from HA automations via a local HTTP server, manages a queue file for crash recovery, and handles all playtime calculations and Steam API calls.
 
 > ℹ️ **Why a queue processor?** When you switch games rapidly on the Steam Deck, the script on the Deck runs every 90 seconds which means it can miss the `No game opened` state between two games. The queue processor detects these swaps, serializes all events and processes them one by one in order, preventing data corruption and ensuring every session is recorded correctly.
 
-### 5.1 Create the Scripts Folder
+#### 2.5.1 Create the Scripts Folder
 
 Use File Editor or SSH to create the folder `/config/scripts/` if it does not already exist.
 
-### 5.2 Add the Queue Processor Script
+#### 2.5.2 Add the Queue Processor Script
 
 Copy [`steam_queue_processor.py`](./home_assistant/scripts/steam_queue_processor.py) into `/config/scripts/steam_queue_processor.py`.
 
-### 5.3 Add the Config File
+#### 2.5.3 Add the Config File
 
 Copy [`steam_queue_config.json`](./home_assistant/scripts/steam_queue_config_without_InfluxDB.json) into `/config/scripts/steam_queue_config.json` and fill in your values for ha_token and ha_url.
 
@@ -153,7 +153,7 @@ To generate a long-lived access token go to your HA **Profile → Security → L
 
 > ℹ️ The service listens on `http://127.0.0.1:8098` by default — only accessible locally, not externally. If port 8098 is already in use on your system you can change it to any free port here and in `shell_commands.yaml`.
 
-### 5.4 Add the Core Automations
+#### 2.5.4 Add the Core Automations
 
 **Game opened automation** — triggers when a game starts on the Steam Deck. Waits 2 seconds for MQTT sensors to settle, then posts the game details to the queue processor service and updates the session helpers.
 
@@ -347,7 +347,7 @@ curl -s -X POST "http://localhost:8086/query?u=YOUR_USER&p=YOUR_PASSWORD" \
 
 ### 6.3 Update the Queue Processor Config
 
-As mentioned in 5.3, use the config file with the InfluxDB settings included and fill in the needed values for the variables.
+As mentioned in 2.5.3, use the config file with the InfluxDB settings included and fill in the needed values for the variables.
 
 Restart the queue processor after saving — either via the watchdog automation or by triggering the startup automation from Developer Tools.
 
