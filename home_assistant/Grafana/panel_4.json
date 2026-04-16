@@ -1,0 +1,127 @@
+{
+  "id": 6,
+  "type": "table",
+  "title": "Top 10 games",
+  "gridPos": {
+    "x": 0,
+    "y": 24,
+    "h": 8,
+    "w": 12
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "align": "auto",
+        "footer": {
+          "reducers": []
+        },
+        "cellOptions": {
+          "type": "auto"
+        },
+        "inspect": false
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "green",
+            "value": null
+          }
+        ]
+      },
+      "fieldMinMax": false,
+      "unit": "h"
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Last Played"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "dateTimeAsIso"
+          }
+        ]
+      }
+    ]
+  },
+  "transformations": [
+    {
+      "id": "labelsToFields",
+      "options": {
+        "mode": "columns"
+      }
+    },
+    {
+      "id": "organize",
+      "options": {
+        "excludeByName": {
+          "Time": true,
+          "type": true
+        },
+        "includeByName": {},
+        "indexByName": {
+          "Time": 0,
+          "game": 1,
+          "last_played": 2,
+          "sessions": 3
+        },
+        "renameByName": {
+          "game": "Game",
+          "last_played": "Last Played",
+          "sessions": "Sessions",
+          "total_hours": "Total Playtime"
+        }
+      }
+    },
+    {
+      "id": "sortBy",
+      "options": {
+        "fields": {},
+        "sort": [
+          {
+            "desc": true,
+            "field": "Total Playtime"
+          }
+        ]
+      }
+    },
+    {
+      "id": "limit",
+      "options": {
+        "limit": 10
+      }
+    }
+  ],
+  "pluginVersion": "12.3.0",
+  "targets": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "ffj5j02qepfcwc"
+      },
+      "hide": false,
+      "query": "SELECT last(\"total_seconds\") / 3600 AS \"total_hours\",\n       last(\"last_played\") AS \"last_played\",\n       last(\"game_type\") AS \"type\"\nFROM \"steamdeck\".\"autogen\".\"playtime\"\nGROUP BY \"game\"",
+      "rawQuery": true,
+      "refId": "A",
+      "resultFormat": "table"
+    }
+  ],
+  "datasource": {
+    "type": "influxdb",
+    "uid": "ffj5j02qepfcwc"
+  },
+  "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "sortBy": [
+      {
+        "desc": true,
+        "displayName": "Sessions"
+      }
+    ]
+  }
+}
