@@ -1,7 +1,7 @@
 {
-  "id": 4,
-  "type": "table",
-  "title": "Top 10 games past 7 days",
+  "id": 6,
+  "type": "timeseries",
+  "title": "Playtime Increase Past 7 Days",
   "gridPos": {
     "x": 0,
     "y": 16,
@@ -11,124 +11,156 @@
   "fieldConfig": {
     "defaults": {
       "custom": {
-        "align": "auto",
-        "footer": {
-          "reducers": []
+        "drawStyle": "line",
+        "lineInterpolation": "smooth",
+        "barAlignment": 0,
+        "barWidthFactor": 0.6,
+        "lineWidth": 2,
+        "fillOpacity": 0,
+        "gradientMode": "opacity",
+        "spanNulls": true,
+        "insertNulls": false,
+        "showPoints": "always",
+        "showValues": false,
+        "pointSize": 5,
+        "stacking": {
+          "mode": "normal",
+          "group": "A"
         },
-        "cellOptions": {
-          "type": "auto"
+        "axisPlacement": "auto",
+        "axisLabel": "",
+        "axisColorMode": "series",
+        "axisBorderShow": false,
+        "scaleDistribution": {
+          "type": "linear"
         },
-        "inspect": false
+        "axisCenteredZero": false,
+        "hideFrom": {
+          "tooltip": false,
+          "viz": false,
+          "legend": false
+        },
+        "thresholdsStyle": {
+          "mode": "off"
+        },
+        "lineStyle": {
+          "fill": "solid"
+        }
+      },
+      "color": {
+        "mode": "palette-classic"
       },
       "mappings": [],
       "thresholds": {
         "mode": "absolute",
         "steps": [
           {
-            "color": "green",
+            "color": "blue",
             "value": null
           }
         ]
       },
-      "fieldMinMax": false
+      "fieldMinMax": false,
+      "links": [],
+      "unit": "h"
     },
-    "overrides": [
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Last Played"
-        },
-        "properties": [
-          {
-            "id": "unit",
-            "value": "dateTimeAsIso"
-          }
-        ]
-      }
-    ]
+    "overrides": []
   },
   "transformations": [
     {
       "id": "labelsToFields",
       "options": {
-        "mode": "columns"
-      }
-    },
-    {
-      "id": "organize",
-      "options": {
-        "excludeByName": {
-          "Time": true
-        },
-        "includeByName": {},
-        "indexByName": {
-          "Time": 0,
-          "game": 1,
-          "last_played": 2,
-          "sessions": 3
-        },
-        "renameByName": {
-          "game": "Game",
-          "last_played": "Last Played",
-          "sessions": "Sessions"
-        }
-      }
-    },
-    {
-      "id": "sortBy",
-      "options": {
-        "sort": [
-          {
-            "desc": true,
-            "field": "Sessions"
-          },
-          {
-            "desc": true,
-            "field": "Last Played"
-          }
-        ]
-      }
-    },
-    {
-      "id": "limit",
-      "options": {
-        "limit": 10
-      }
-    },
-    {
-      "id": "renameByRegex",
-      "options": {
-        "regex": "\\\\([: ])",
-        "renamePattern": "$1"
+        "valueLabel": "game"
       }
     }
   ],
   "pluginVersion": "12.3.0",
   "targets": [
     {
+      "alias": "$tag_name",
       "datasource": {
         "type": "influxdb",
-        "uid": "ffj5j02qepfcwc"
+        "uid": "000000002"
       },
+      "groupBy": [
+        {
+          "params": [
+            "$__interval"
+          ],
+          "type": "time"
+        },
+        {
+          "params": [
+            "hostname"
+          ],
+          "type": "tag"
+        },
+        {
+          "params": [
+            "linear"
+          ],
+          "type": "fill"
+        }
+      ],
       "hide": false,
-      "query": "SELECT \n  max(\"session_count\") AS \"sessions\",\n  last(\"last_played\") AS \"last_played\"\nFROM \"steamdeck\".\"autogen\".\"playtime\"\nWHERE time > now() - 7d\nGROUP BY \"game\"\n",
+      "measurement": "snmp",
+      "orderByTime": "ASC",
+      "policy": "default",
+      "query": "SELECT cumulative_sum(sum(\"session_seconds\")) / 3600 AS \"total_hours\"\nFROM \"steamdeck\".\"autogen\".\"playtime\"\nWHERE $timeFilter\nGROUP BY time($__interval), \"game\" fill(0)",
       "rawQuery": true,
       "refId": "A",
-      "resultFormat": "table"
+      "resultFormat": "time_series",
+      "select": [
+        [
+          {
+            "params": [
+              "value"
+            ],
+            "type": "field"
+          },
+          {
+            "params": [],
+            "type": "mean"
+          },
+          {
+            "params": [
+              " / 10"
+            ],
+            "type": "math"
+          }
+        ]
+      ],
+      "tags": [
+        {
+          "key": "hostname",
+          "operator": "=~",
+          "value": "/powerbar.*.$DC_identifier.transip.io/"
+        },
+        {
+          "condition": "AND",
+          "key": "metric",
+          "operator": "=",
+          "value": "PDU2-MIB::measurementsExternalSensorValue.1.1"
+        }
+      ]
     }
   ],
   "datasource": {
     "type": "influxdb",
     "uid": "ffj5j02qepfcwc"
   },
+  "interval": "12h",
   "options": {
-    "showHeader": true,
-    "cellHeight": "sm",
-    "sortBy": [
-      {
-        "desc": true,
-        "displayName": "Sessions"
-      }
-    ]
+    "tooltip": {
+      "mode": "multi",
+      "sort": "none",
+      "hideZeros": false
+    },
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    }
   }
 }
