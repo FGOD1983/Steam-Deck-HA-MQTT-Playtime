@@ -388,7 +388,9 @@ In Grafana go to **Dashboards → New → New Dashboard** and create your own pa
 
 [`**Panel 2 — Time Played Past 7 Days:**`](./home_assistant/Grafana/panel_2.json)
 
-[`**Panel 3 — Top 10 Games Past 7 Days:**`](./home_assistant/Grafana/panel_3.json)
+[`**Panel 3 — Playtime Increase Past 7 Days:**`](./home_assistant/Grafana/panel_3.json)
 
-[`**Panel 4 — Top 10 Games All Time:**`](./home_assistant/Grafana/panel_4.json)
+[`**Panel 4 — Top 10 games past 7 days:**`](./home_assistant/Grafana/panel_4.json)
+
+[`**Panel 5 — Top 10 Games All Time:**`](./home_assistant/Grafana/panel_5.json)
 
