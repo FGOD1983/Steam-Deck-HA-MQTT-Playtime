@@ -1,7 +1,7 @@
 {
-  "id": 6,
+  "id": 4,
   "type": "table",
-  "title": "Top 10 games",
+  "title": "Top 10 games past 7 days",
   "gridPos": {
     "x": 0,
     "y": 24,
@@ -30,8 +30,7 @@
           }
         ]
       },
-      "fieldMinMax": false,
-      "unit": "h"
+      "fieldMinMax": false
     },
     "overrides": [
       {
@@ -59,8 +58,7 @@
       "id": "organize",
       "options": {
         "excludeByName": {
-          "Time": true,
-          "type": true
+          "Time": true
         },
         "includeByName": {},
         "indexByName": {
@@ -72,19 +70,21 @@
         "renameByName": {
           "game": "Game",
           "last_played": "Last Played",
-          "sessions": "Sessions",
-          "total_hours": "Total Playtime"
+          "sessions": "Sessions"
         }
       }
     },
     {
       "id": "sortBy",
       "options": {
-        "fields": {},
         "sort": [
           {
             "desc": true,
-            "field": "Total Playtime"
+            "field": "Sessions"
+          },
+          {
+            "desc": true,
+            "field": "Last Played"
           }
         ]
       }
@@ -93,6 +93,13 @@
       "id": "limit",
       "options": {
         "limit": 10
+      }
+    },
+    {
+      "id": "renameByRegex",
+      "options": {
+        "regex": "\\\\([: ])",
+        "renamePattern": "$1"
       }
     }
   ],
@@ -104,7 +111,7 @@
         "uid": "ffj5j02qepfcwc"
       },
       "hide": false,
-      "query": "SELECT last(\"total_seconds\") / 3600 AS \"total_hours\",\n       last(\"last_played\") AS \"last_played\",\n       last(\"game_type\") AS \"type\"\nFROM \"steamdeck\".\"autogen\".\"playtime\"\nGROUP BY \"game\"",
+      "query": "SELECT \n  max(\"session_count\") AS \"sessions\",\n  last(\"last_played\") AS \"last_played\"\nFROM \"steamdeck\".\"autogen\".\"playtime\"\nWHERE time > now() - 7d\nGROUP BY \"game\"\n",
       "rawQuery": true,
       "refId": "A",
       "resultFormat": "table"
