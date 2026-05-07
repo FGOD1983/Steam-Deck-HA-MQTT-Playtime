@@ -9,13 +9,16 @@ import datetime
 import time
 import ssl
 import json
+import math
 import requests
 import psutil
+import vdf
 from urllib.parse import quote
 
 # ===========================
 # Configuration
 # ===========================
+
 MQTT_HOST = "YOUR_HA_RUNNING_MQTT"
 MQTT_PORT = 8883
 MQTT_USER = "YOUR_MQTT_USER_FOR_HA"
@@ -24,6 +27,8 @@ BASE_TOPIC = "steamdeck"
 CACHE_PATH = "/home/deck/scripts/game_cache.json"
 TRACE_LOG_PATH = "/home/deck/scripts/game_trace.log"
 STEAM_APPS_PATH = "/home/deck/.steam/steam/steamapps"
+QUEUE_PATH       = "/home/deck/scripts/playtime_queue.json"
+STEAM_USER_PATH  = os.path.expanduser("~/.local/share/Steam/userdata")
 
 os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
 
@@ -56,16 +61,167 @@ def get_output(cmd):
         return ""
 
 # ===========================
+# localconfig.vdf helpers
+# ===========================
+
+def find_steam_user_id():
+    """Return the first numeric Steam userdata directory found."""
+    try:
+        ids = [d for d in os.listdir(STEAM_USER_PATH)
+               if os.path.isdir(os.path.join(STEAM_USER_PATH, d)) and d.isdigit()]
+        return ids[0] if ids else None
+    except:
+        return None
+
+def get_localconfig_playtime(appid):
+    """
+    Read the current total Playtime (minutes) for a given appid from localconfig.vdf.
+    appid can be a string in any format — we try signed int32 str (non-Steam)
+    and plain numeric str (Steam Native).
+    Returns integer minutes, or 0 if not found.
+    """
+    uid = find_steam_user_id()
+    if not uid:
+        return 0
+    lc_path = os.path.join(STEAM_USER_PATH, uid, "config", "localconfig.vdf")
+    if not os.path.exists(lc_path):
+        return 0
+    try:
+        with open(lc_path, "r", encoding="utf-8") as f:
+            lc = vdf.loads(f.read())
+        apps = (lc["UserLocalConfigStore"]
+                   ["Software"]
+                   ["Valve"]
+                   ["Steam"]
+                   ["apps"])
+        # Try the appid as-is first, then as signed int32 string
+        entry = apps.get(str(appid))
+        if not entry and appid:
+            try:
+                signed = str(int(appid) if int(appid) < 2**31 else int(appid) - 2**32)
+                entry = apps.get(signed)
+            except:
+                pass
+        if entry:
+            return int(entry.get("Playtime", 0))
+    except Exception as e:
+        print_log(f"localconfig.vdf read error: {e}")
+    return 0
+
+# ===========================
+# Playtime Queue
+# ===========================
+
+def load_queue():
+    """Load playtime_queue.json, return dict with 'active_sessions' list."""
+    if not os.path.exists(QUEUE_PATH):
+        return {"active_sessions": []}
+    try:
+        with open(QUEUE_PATH, "r") as f:
+            data = json.load(f)
+        if "active_sessions" not in data:
+            data["active_sessions"] = []
+        return data
+    except Exception as e:
+        print_log(f"Queue load error: {e}")
+        return {"active_sessions": []}
+
+def save_queue(queue):
+    """Atomically write playtime_queue.json."""
+    tmp = QUEUE_PATH + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(queue, f, indent=2)
+        os.replace(tmp, QUEUE_PATH)
+    except Exception as e:
+        print_log(f"Queue save error: {e}")
+
+def get_open_session(queue):
+    """Return the first session with game_state == 'opened', or None."""
+    for s in queue["active_sessions"]:
+        if s.get("game_state") == "opened":
+            return s
+    return None
+
+def open_session(queue, name, appid):
+    """Add a new opened session to the queue."""
+    now         = int(time.time())
+    playtime    = get_localconfig_playtime(appid) if appid else 0
+    session = {
+        "session_id":     str(now),
+        "appid":          appid or "",
+        "name":           name,
+        "game_state":     "opened",
+        "start_playtime": playtime,
+        "end_playtime":   None,
+        "start_time":     now,
+        "end_time":       None,
+    }
+    queue["active_sessions"].append(session)
+    save_queue(queue)
+    print_log(f"Queue: opened session for '{name}' (appid={appid}, start_playtime={playtime}m)")
+    return session
+
+def close_session(queue, session):
+    """Mark a session as closed, read end_playtime from localconfig.vdf."""
+    now      = int(time.time())
+    playtime = get_localconfig_playtime(session.get("appid")) if session.get("appid") else 0
+    session["game_state"]   = "closed"
+    session["end_time"]     = now
+    session["end_playtime"] = playtime
+    save_queue(queue)
+    print_log(
+        f"Queue: closed session '{session['name']}' "
+        f"(end_playtime={playtime}m, duration={now - session['start_time']}s)"
+    )
+
+def remove_session(queue, session_id):
+    """Remove a session from the queue by session_id."""
+    before = len(queue["active_sessions"])
+    queue["active_sessions"] = [
+        s for s in queue["active_sessions"]
+        if s["session_id"] != session_id
+    ]
+    after = len(queue["active_sessions"])
+    if before != after:
+        save_queue(queue)
+        print_log(f"Queue: removed session {session_id}")
+
+def update_queue_for_game(queue, detected_game, detected_appid):
+    """
+    Compare detected game against the current open session.
+    - No game → close open session if any
+    - Same game as open session → no change
+    - Different game → close open session, open new one
+    - New game, nothing open → open new session
+    """
+    no_game     = (detected_game == "No game opened")
+    open_sess   = get_open_session(queue)
+
+    if no_game:
+        if open_sess:
+            print_log(f"Queue: no game detected, closing '{open_sess['name']}'")
+            close_session(queue, open_sess)
+        return
+
+    # Game is running — check if it matches the open session
+    if open_sess:
+        if open_sess["name"] == detected_game:
+            # Same game still running — nothing to do
+            return
+        else:
+            # Game swap — close current, open new
+            print_log(f"Queue: game swap '{open_sess['name']}' → '{detected_game}'")
+            close_session(queue, open_sess)
+
+    # Open a new session
+    open_session(queue, detected_game, detected_appid)
+
+# ===========================
 # ACF Manifest Cache (Steam native games)
 # ===========================
 
 def build_acf_cache():
-
-    """
-    Read all .acf manifest files from steamapps folders.
-    Returns dict of {appid: name, installdir_lower: name}.
-    """
-
     acf_cache = {}
     search_paths = [
         STEAM_APPS_PATH,
@@ -100,12 +256,6 @@ def build_acf_cache():
 # ===========================
 
 def parse_shortcuts_vdf(vdf_path):
-
-    """
-    Parse Steam's binary shortcuts.vdf.
-    Returns dict keyed by runtime SteamGameId and lowercased app name.
-    """
-
     shortcuts = {}
     try:
         with open(vdf_path, "rb") as f:
@@ -165,7 +315,6 @@ def build_shortcuts_cache():
 ACF_CACHE       = build_acf_cache()
 SHORTCUTS_CACHE = build_shortcuts_cache()
 
-# Emulator names that EmuDeck appends to shortcut names in parentheses
 EMULATOR_SUFFIXES = re.compile(
     r'\s*\((?:Ryujinx|Yuzu|RPCS3|PCSX2|Dolphin|Citra|mGBA|melonDS|DuckStation|'
     r'PPSSPP|Xemu|Xenia|MAME|RetroArch|Cemu|Lime3DS|Sudachi|Citron|'
@@ -174,14 +323,10 @@ EMULATOR_SUFFIXES = re.compile(
 )
 
 def strip_emulator_suffix(name):
-    """Verwijder emulator suffixes en ruim overgebleven haakjes op."""
     if not name:
         return name
-    # 1. Verwijder de specifieke emulator (bijv. " (Ryujinx)")
     name = EMULATOR_SUFFIXES.sub('', name)
-    # 2. Verwijder alle tekst tussen haakjes die aan het einde staat (bijv. " [Non-Steam]")
     name = re.sub(r'\s*[\[\(].*?[\]\)]\s*$', '', name)
-    # 3. Verwijder losse hangende haakjes aan het einde van de regel
     name = re.sub(r'[\s\(\)\[\]]+$', '', name)
     return name.strip()
 
@@ -190,9 +335,6 @@ def strip_emulator_suffix(name):
 # ===========================
 
 def get_steam_appid_from_env(pid):
-
-    """Read SteamGameId or SteamAppId from /proc/<pid>/environ."""
-
     try:
         with open(f"/proc/{pid}/environ", "rb") as f:
             env = f.read().decode("utf-8", errors="replace")
@@ -219,12 +361,6 @@ def get_steam_appid_from_cmdline(cmdline_str):
     return None
 
 def is_steam_native_appid(appid):
-
-    """
-    Real Steam appids are < 0x80000000 (2147483648).
-    Shortcut fake appids are >= 0x80000000.
-    """
-
     if not appid:
         return False
     try:
@@ -311,19 +447,6 @@ def clean_raw_name(raw_name):
 # ===========================
 
 def resolve_game_title(raw_name, appid=None):
-
-    """
-    Resolve raw detected name to a proper title.
-    Priority:
-      1. Game cache
-      2. Steam API by appid (Steam native only)
-      3. ACF manifest (by appid or folder)
-      4. shortcuts.vdf cache
-      5. Steam store search
-      6. RAWG
-      7. Cleaned name fallback
-    """
-
     cache_data = {}
     if os.path.exists(CACHE_PATH):
         try:
@@ -404,21 +527,7 @@ def resolve_game_title(raw_name, appid=None):
 # ===========================
 
 def detect_game():
-
-    """
-    Returns a tuple: (game_name, appid, game_type)
-
-    game_type values:
-      "Steam Native"  - real Steam game (appid < 0x80000000, found in ACF)
-      "Non-Steam"     - shortcut added to Steam (Heroic, GOG, Flatpak via Game Mode, etc.)
-      "ROM"           - emulated ROM file
-      "ExoDOS"        - DOS game via eXoDOS
-      "None"          - no game detected
-    """
-
     possible_matches = []
-
-    # Bepaal de huidige modus om later te filteren
     is_desktop_mode = not get_output("ps -A | grep gamescope")
 
     ignore_list = [
@@ -431,7 +540,7 @@ def detect_game():
         "iscriptevaluator", "legacycompat", "vivox", "easyanticheat",
         "python", "bash", "/bin/sh", "systemd", "dbus", "pipewire",
         "gamescope", "xdg-", "kwin", "plasmashell",
-        "exogui",       # ExoDOS launcher — ignore until a game is actually started
+        "exogui",
     ]
 
     tech_folders = {
@@ -454,15 +563,10 @@ def detect_game():
             if not cmdline:
                 continue
 
-            full_cmd  = " ".join(cmdline)
+            full_cmd       = " ".join(cmdline)
             full_cmd_lower = full_cmd.lower()
-            pid       = proc.info.get('pid')
+            pid            = proc.info.get('pid')
 
-            # ── Priority 0: Reaper process ──
-
-            # Heroic and other launchers use Steam's reaper with AppId= in cmdline.
-            # Check BEFORE ignore_list since "reaper" is filtered there.
-            
             reaper_match = re.search(r'reaper.*AppId=(\d+)', full_cmd, re.IGNORECASE)
             if reaper_match:
                 appid = reaper_match.group(1)
@@ -485,18 +589,10 @@ def detect_game():
                             'appid':     appid,
                             'game_type': "Non-Steam",
                             'resolved':  True,
-                            'cpu':        proc.info['cpu_percent'],
-                            'time':       proc.info['create_time'],
+                            'cpu':       proc.info['cpu_percent'],
+                            'time':      proc.info['create_time'],
                         })
-                continue # Never process reaper further regardless 
-
-            # ── Priority 1: eXoDOS game detection ──
-
-            # Must be checked BEFORE ignore_list since the game name is only visible
-            # in the bash/konsole cmdline that launches the .bsh file, and both are
-            # filtered by ignore_list. The regex is intentionally strict — it only
-            # matches paths inside an eXo*-named folder with a .bsh or .command
-            # extension, so random background scripts will never accidentally match.
+                continue
 
             exo_match = re.search(
                 r'/eXo[^/]*/(?:[^/]+/)*([^/]+)\.(?:command|bsh)',
@@ -504,9 +600,6 @@ def detect_game():
             )
             if exo_match:
                 raw_title = exo_match.group(1)
-                
-                # Skip if this is the ExoDOS launcher itself (exogui.command)
-
                 if "exogui" not in raw_title.lower():
                     title = re.sub(r'\s*\(\d{4}\)\s*', ' ', raw_title).strip()
                     possible_matches.append({
@@ -514,8 +607,8 @@ def detect_game():
                         'appid':     None,
                         'game_type': "ExoDOS",
                         'resolved':  False,
-                        'cpu':        proc.info['cpu_percent'],
-                        'time':       proc.info['create_time'],
+                        'cpu':       proc.info['cpu_percent'],
+                        'time':      proc.info['create_time'],
                     })
                 continue
 
@@ -524,19 +617,12 @@ def detect_game():
 
             appid = get_steam_appid_from_env(pid) or get_steam_appid_from_cmdline(full_cmd)
 
-            # ── Desktop Mode Filter ──
-            # Als we in Desktop mode zijn, accepteren we alleen processen die een 
-            # bekend AppID hebben in onze caches (Native of Shortcut).
             if is_desktop_mode:
                 is_known_steam = appid and (appid in ACF_CACHE or appid in SHORTCUTS_CACHE)
-                # We laten ROMs en ExoDOS door (die zijn hierboven al afgehandeld of hebben specifieke paden)
-                # Maar algemene pad-detectie of onbekende AppIDs negeren we in Desktop Mode.
                 if not is_known_steam:
-                    # Check of het een ROM is via het pad voordat we het weggooien
                     if not re.search(r'/roms/', full_cmd_lower):
                         continue
 
-            # ── Steam native games ──
             if appid and appid in ACF_CACHE and is_steam_native_appid(appid):
                 cache_data = {}
                 if os.path.exists(CACHE_PATH):
@@ -553,12 +639,11 @@ def detect_game():
                     'appid':     appid,
                     'game_type': "Steam Native",
                     'resolved':  True,
-                    'cpu':        proc.info['cpu_percent'],
-                    'time':       proc.info['create_time'],
+                    'cpu':       proc.info['cpu_percent'],
+                    'time':      proc.info['create_time'],
                 })
                 continue
 
-            # ── Non-Steam shortcuts (fake appid in shortcuts cache) ──
             if appid and appid in SHORTCUTS_CACHE:
                 cache_data = {}
                 if os.path.exists(CACHE_PATH):
@@ -576,12 +661,11 @@ def detect_game():
                     'appid':     appid,
                     'game_type': "Non-Steam",
                     'resolved':  True,
-                    'cpu':        proc.info['cpu_percent'],
-                    'time':       proc.info['create_time'],
+                    'cpu':       proc.info['cpu_percent'],
+                    'time':      proc.info['create_time'],
                 })
                 continue
 
-            # ── ROM files ──
             rom_ext = (
                 r'iso|gcm|rvz|zip|7z|cue|bin|elf|nsp|xci|wua|'
                 r'nes|sfc|smc|n64|gba|gbc|gb|nds|z64|v64|chd|pbp|cso'
@@ -596,12 +680,11 @@ def detect_game():
                     'appid':     None,
                     'game_type': "ROM",
                     'resolved':  False,
-                    'cpu':        proc.info['cpu_percent'],
-                    'time':       proc.info['create_time'],
+                    'cpu':       proc.info['cpu_percent'],
+                    'time':      proc.info['create_time'],
                 })
                 continue
 
-            # ── Path-based detection (Fallback only in Game Mode) ──
             if not is_desktop_mode:
                 is_steam_or_exe = "steamapps/common" in full_cmd_lower or ".exe" in full_cmd_lower
                 is_linux_native = not is_steam_or_exe and any(
@@ -615,7 +698,7 @@ def detect_game():
                         full_cmd
                     )
                     if path_match:
-                        full_path  = path_match.group(0).replace("\\", "/")
+                        full_path   = path_match.group(0).replace("\\", "/")
                         parts       = [p for p in full_path.split("/") if p]
                         parts_lower = [p.lower() for p in parts]
                         game_folder = None
@@ -653,8 +736,8 @@ def detect_game():
                                 'appid':     appid,
                                 'game_type': game_type,
                                 'resolved':  bool(acf_hit),
-                                'cpu':        proc.info['cpu_percent'],
-                                'time':       proc.info['create_time'],
+                                'cpu':       proc.info['cpu_percent'],
+                                'time':      proc.info['create_time'],
                             })
 
         except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -678,7 +761,7 @@ def detect_game():
     return resolved_title, best.get('appid'), best['game_type']
 
 # ===========================
-# MQTT & Run
+# Network
 # ===========================
 
 def is_network_online():
@@ -688,12 +771,68 @@ def is_network_online():
         for line in output.splitlines()
     )
 
+# ===========================
+# MQTT ACK handling
+# ===========================
+
+def process_acks(client, queue):
+    """
+    Read retained ACK messages from steamdeck/playtime/ack/#.
+    For each ACK:
+      - Remove the session from the local queue
+      - Clear the retained ACK topic on MQTT
+    Returns the updated queue.
+    """
+    acked_session_ids = []
+
+    def on_message(c, userdata, msg):
+        topic   = msg.topic
+        payload = msg.payload.decode("utf-8", errors="replace").strip()
+        if not payload:
+            return  # already cleared, ignore
+        # Topic format: steamdeck/playtime/ack/<session_id>
+        parts = topic.split("/")
+        if len(parts) == 4 and parts[3]:
+            session_id = parts[3]
+            print_log(f"ACK received for session {session_id}")
+            acked_session_ids.append(session_id)
+
+    client.on_message = on_message
+    client.subscribe(f"{BASE_TOPIC}/playtime/ack/#")
+
+    # Give retained messages a moment to arrive
+    client.loop_start()
+    time.sleep(0.5)
+    client.loop_stop()
+
+    for session_id in acked_session_ids:
+        remove_session(queue, session_id)
+        # Clear the retained ACK topic
+        client.publish(
+            f"{BASE_TOPIC}/playtime/ack/{session_id}",
+            payload="",
+            retain=True
+        )
+        print_log(f"Cleared ACK topic for session {session_id}")
+
+    return queue
+
+# ===========================
+# MQTT & Run
+# ===========================
+
 def run_update(offline_mode=False):
     print_log("--- Starting MQTT Update ---")
     detected_game, detected_appid, detected_type = detect_game()
 
+    # Always update the local queue regardless of network state
+    queue = load_queue()
+    update_queue_for_game(queue, detected_game, detected_appid)
+    # Reload after potential saves inside update_queue_for_game
+    queue = load_queue()
+
     if not is_network_online():
-        print_log("Network offline. Skipping.")
+        print_log("Network offline. Skipping MQTT publish.")
         return
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -703,46 +842,59 @@ def run_update(offline_mode=False):
 
     try:
         client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
-        client.loop_start()
+
+        # ── Step 1: Process ACKs from HA ──────────────────────────────────────
+        queue = process_acks(client, queue)
+        # Reload after ACK removals
+        queue = load_queue()
 
         if offline_mode:
+            client.loop_start()
             client.publish(f"{BASE_TOPIC}/availability", "offline", retain=True)
+            time.sleep(1)
+            client.loop_stop()
+            client.disconnect()
             write_trace("OFFLINE SIGNAL", "None", 0, "Status")
+            return
+
+        # ── Step 2: Collect sensor data ───────────────────────────────────────
+        eth_check    = get_output("nmcli -t -f TYPE,STATE dev | grep 'ethernet:connected'")
+        is_docked    = "Docked" if eth_check else "Undocked"
+
+        if eth_check:
+            network_name = "Ethernet"
         else:
-            # ── Network Info & Docked Status Logic ──
-            # We check if ethernet is connected.
-            # Since the Steam Deck has no native ethernet, this implies a dock is used.
-            eth_check = get_output("nmcli -t -f TYPE,STATE dev | grep 'ethernet:connected'")
-            is_docked = "Docked" if eth_check else "Undocked"
+            network_name = get_output("nmcli -t -f ACTIVE,SSID dev wifi | grep '^yes' | cut -d':' -f2")
+            if not network_name:
+                network_name = "Disconnected"
 
-            # Get Network Name — ethernet takes priority over WiFi when docked
-            if eth_check:
-                network_name = "Ethernet"
-            else:
-                network_name = get_output("nmcli -t -f ACTIVE,SSID dev wifi | grep '^yes' | cut -d':' -f2")
-                if not network_name:
-                    network_name = "Disconnected"
+        battery = get_output(
+            "upower -i /org/freedesktop/UPower/devices/battery_BAT1 "
+            "| grep percentage | awk '{print $2}' | tr -d '%'"
+        ) or "0"
+        charging = get_output(
+            "upower -i /org/freedesktop/UPower/devices/battery_BAT1 "
+            "| grep state | awk '{print $2}'"
+        ).capitalize() or "Unknown"
+        mode = "Game Mode" if get_output("ps -A | grep gamescope") else "Desktop Mode"
 
-            battery = get_output(
-                "upower -i /org/freedesktop/UPower/devices/battery_BAT1 "
-                "| grep percentage | awk '{print $2}' | tr -d '%'"
-            ) or "0"
-            charging = get_output(
-                "upower -i /org/freedesktop/UPower/devices/battery_BAT1 "
-                "| grep state | awk '{print $2}'"
-            ).capitalize() or "Unknown"
-            mode = "Game Mode" if get_output("ps -A | grep gamescope") else "Desktop Mode"
+        # ── Step 3: Publish all sensors ───────────────────────────────────────
+        client.loop_start()
 
-            # Publish all 8 sensors
-            client.publish(f"{BASE_TOPIC}/battery",      battery,       retain=True)
-            client.publish(f"{BASE_TOPIC}/charging",     charging,      retain=True)
-            client.publish(f"{BASE_TOPIC}/mode",         mode,          retain=True)
-            client.publish(f"{BASE_TOPIC}/network",      network_name,  retain=True)
-            client.publish(f"{BASE_TOPIC}/docked",       is_docked,     retain=True) # Based on Ethernet
-            client.publish(f"{BASE_TOPIC}/game",         detected_game, retain=True)
-            client.publish(f"{BASE_TOPIC}/game_type",    detected_type, retain=True)
-            client.publish(f"{BASE_TOPIC}/appid",        detected_appid or "", retain=True)
-            client.publish(f"{BASE_TOPIC}/availability", "online",      retain=True)
+        client.publish(f"{BASE_TOPIC}/battery",      battery,       retain=True)
+        client.publish(f"{BASE_TOPIC}/charging",     charging,      retain=True)
+        client.publish(f"{BASE_TOPIC}/mode",         mode,          retain=True)
+        client.publish(f"{BASE_TOPIC}/network",      network_name,  retain=True)
+        client.publish(f"{BASE_TOPIC}/docked",       is_docked,     retain=True)
+        client.publish(f"{BASE_TOPIC}/game",         detected_game, retain=True)
+        client.publish(f"{BASE_TOPIC}/game_type",    detected_type, retain=True)
+        client.publish(f"{BASE_TOPIC}/appid",        detected_appid or "", retain=True)
+        client.publish(f"{BASE_TOPIC}/availability", "online",      retain=True)
+
+        # ── Step 4: Publish playtime queue ────────────────────────────────────
+        queue_payload = json.dumps(queue, indent=2)
+        client.publish(f"{BASE_TOPIC}/playtime/queue", queue_payload, retain=True)
+        print_log(f"Queue published: {len(queue['active_sessions'])} session(s)")
 
         time.sleep(1)
         client.loop_stop()
@@ -754,3 +906,4 @@ def run_update(offline_mode=False):
 
 if __name__ == "__main__":
     run_update(offline_mode="--offline" in sys.argv)
+

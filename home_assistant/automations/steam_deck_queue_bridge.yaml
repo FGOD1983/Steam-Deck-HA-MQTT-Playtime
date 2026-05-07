@@ -1,0 +1,9 @@
+alias: "Steam Deck Queue Bridge"
+description: "Stuurt de MQTT queue door naar het Python script"
+trigger:
+  - platform: mqtt
+    topic: "steamdeck/playtime/queue" # Zorg dat dit overeenkomt met je Deck script
+action:
+  - service: shell_command.process_steam_queue
+    data:
+      payload: "{{ trigger.payload }}"
