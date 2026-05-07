@@ -1,0 +1,25 @@
+alias: Steam Queue Processor - Watchdog
+description: >
+  Checks every 5 minutes if the Steam queue processor service is still running.
+  Restarts it automatically if it has crashed and sends a persistent
+  notification.
+triggers:
+  - trigger: time_pattern
+    minutes: /5
+actions:
+  - action: shell_command.check_queue_processor
+    response_variable: check_result
+  - if:
+      - condition: template
+        value_template: "{{ check_result.stdout | trim != '200' }}"
+    then:
+      - action: shell_command.start_queue_processor
+      - action: persistent_notification.create
+        data:
+          title: Steam Queue Processor
+          message: >
+            The Steam queue processor service was not responding and has been
+            restarted automatically.
+          notification_id: steam_queue_processor_restart
+mode: single
+

@@ -1,0 +1,219 @@
+#Steam Deck
+- sensor:
+    # 🔋 Battery Sensor
+    - name: "Steam Deck Battery Display"
+      unique_id: steam_deck_battery_display
+      state: >
+        {% set val = states('sensor.steam_deck_battery') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          {{''}}
+        {% else %}
+          {{ val }}%
+        {% endif %}
+      icon: >
+        {% set val = states('sensor.steam_deck_battery') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          mdi:battery-alert
+        {% else %}
+          {% set pct = val | int(0) %}
+          {% if pct > 90 %}
+            mdi:battery
+          {% elif pct > 80 %}
+            mdi:battery-90
+          {% elif pct > 70 %}
+            mdi:battery-80
+          {% elif pct > 60 %}
+            mdi:battery-70
+          {% elif pct > 50 %}
+            mdi:battery-60
+          {% elif pct > 40 %}
+            mdi:battery-50
+          {% elif pct > 30 %}
+            mdi:battery-40
+          {% elif pct > 20 %}
+            mdi:battery-30
+          {% elif pct > 10 %}
+            mdi:battery-20
+          {% elif pct > 0 %}
+            mdi:battery-10
+          {% else %}
+            mdi:battery-outline
+          {% endif %}
+        {% endif %}
+    
+    # 📡 Network Sensor
+    - name: "Steam Deck Network Display"
+      unique_id: steam_deck_network_display
+      state: >
+        {% set val = states('sensor.steam_deck_network') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          {{''}}
+        {% else %}
+          {{ val }}
+        {% endif %}
+      icon: >
+        {% set val = states('sensor.steam_deck_network') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          mdi:lan-disconnect
+        {% elif val == 'Ethernet' %}
+          mdi:ethernet
+        {% else %}
+          mdi:wifi
+        {% endif %}
+        
+      # 🎮 Mode Sensor
+    - name: "Steam Deck Mode Display"
+      unique_id: steam_deck_mode_display
+      state: >
+        {% set val = states('sensor.steam_deck_mode') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          {{''}}
+        {% else %}
+          {{ val }}
+        {% endif %}
+      icon: >
+        {% set val = states('sensor.steam_deck_mode') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          mdi:alert-circle-outline
+        {% elif val == 'Game Mode' %}
+          mdi:gamepad-variant-outline
+        {% elif val == 'Desktop Mode' %}
+          mdi:monitor
+        {% else %}
+          mdi:alert-circle-outline
+        {% endif %}
+        
+    # 🔌 Charging Sensor
+    - name: "Steam Deck Charging Display"
+      unique_id: steam_deck_charging_display
+      state: >
+        {% set val = states('sensor.steam_deck_charging') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          {{''}}
+        {% elif val in ['Pending-charge'] %}
+          Battery Protection
+        {% elif val in ['Fully-charged'] %}
+          Fully-charged
+        {% else %}
+          {{ val }}
+        {% endif %}
+      icon: >
+        {% set val = states('sensor.steam_deck_charging') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          mdi:battery-remove-outline
+        {% elif val == 'Charging' %}
+          mdi:battery-charging
+        {% elif val in ['Pending-charge'] %}
+          mdi:battery-heart
+        {% elif val in ['Fully-charged'] %}
+          mdi:battery-check
+        {% elif val == 'Discharging' %}
+          mdi:battery-arrow-down-outline
+        {% else %}
+          mdi:battery-remove-outline
+        {% endif %}
+        
+    # 🎮 Active Game Sensor
+    - name: "Steam Deck Active Game Display"
+      unique_id: steam_deck_active_game_display
+      state: >
+        {% set val = states('sensor.steam_deck_active_game') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          Offline
+        {% else %}
+          {{ val }}
+        {% endif %}
+      icon: >
+        {% set val = states('sensor.steam_deck_active_game') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          mdi:controller-off
+        {% else %}
+          mdi:controller
+        {% endif %}
+        
+    # 🎮 Dock Status Sensor
+    - name: "Steam Deck Dock Status Display"
+      unique_id: steam_deck_dock_status_display
+      state: >
+        {% set val = states('sensor.steam_deck_dock_status') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          {{''}}
+        {% else %}
+          {{ val }}
+        {% endif %}
+      icon: >
+        {% set val = states('sensor.steam_deck_dock_status') %}
+        {% if val in ['unavailable', 'unknown', 'none'] %}
+          {{ state_attr('sensor.steam_deck_dock_status_display', 'icon')
+             if state_attr('sensor.steam_deck_dock_status_display', 'icon') else 'mdi:controller-off' }}
+        {% elif val == 'Docked' %}
+          fgod:steam-deck-docked-variant
+        {% else %}
+          fgod:steam-deck-variant-1
+        {% endif %}
+        
+    # 🎮 Active Game Display
+    - name: "Steam Deck Active Game Display"
+      unique_id: steam_deck_active_game_display
+      state: >
+        {% set game = states('sensor.steam_deck_active_game') %}
+        {% set type = states('sensor.steam_deck_game_type') %}
+        {% if game in ['unavailable', 'unknown', 'none', 'No game opened'] %}
+          Not Playing
+        {% else %}
+          {{ game }}
+          {% if type not in ['unavailable', 'unknown', 'None', 'Steam Native'] %}
+            ({{ type }})
+          {% endif %}
+        {% endif %}
+      attributes:
+        appid: "{{ states('sensor.steam_deck_appid') }}"
+        game_type: "{{ states('sensor.steam_deck_game_type') }}"
+        # Link to Steam Store if it's a native game
+        store_link: >
+          {% set appid = states('sensor.steam_deck_appid') %}
+          {% if appid | int(0) > 0 and states('sensor.steam_deck_game_type') == 'Steam Native' %}
+            https://store.steampowered.com/app/{{ appid }}
+          {% else %}
+            none
+          {% endif %}
+      icon: >
+        {% set game = states('sensor.steam_deck_active_game') %}
+        {% set type = states('sensor.steam_deck_game_type') %}
+        {% if game in ['unavailable', 'unknown', 'none', 'No game opened'] %}
+          mdi:controller-off
+        {% elif type == 'ROM' %}
+          mdi:microsoft-xbox-controller-retro
+        {% elif type == 'ExoDOS' %}
+          mdi:dos-console
+        {% else %}
+          mdi:controller
+        {% endif %}
+        
+    - name: Steam Deck Cover URL
+      unique_id: steam_deck_cover_url
+      state: >
+        {% set game_type = states('sensor.steam_deck_game_type') %}
+        {% set appid = states('sensor.steam_deck_appid') %}
+        {% set igdb = states('input_text.steam_deck_game_cover_url') %}
+        {% set image_type = states('input_text.steam_pending_image_type') %}
+        {% if game_type == 'Steam Native' and appid not in ['', 'unknown', 'unavailable', 'none'] %}
+          {% if image_type == 'capsule' %}
+            https://cdn.cloudflare.steamstatic.com/steam/apps/{{ appid }}/capsule_616x353.jpg
+          {% else %}
+            https://cdn.cloudflare.steamstatic.com/steam/apps/{{ appid }}/header.jpg
+          {% endif %}
+        {% else %}
+          {{ igdb }}
+        {% endif %}
+
+- image:
+  - name: Steamdeck Active Game Cover
+    unique_id: steamdeck_active_game_cover
+    url: >
+      {% set cover = states('sensor.steam_deck_cover_url') %}
+      {% if cover != 'none' and cover != 'unknown' and cover != 'unavailable' and cover.startswith('http') %}
+        {{ cover }}
+      {% else %}
+        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR42mNk+M8AAY0BAJ8f66oAAAAASUVORK5CYII=
+      {% endif %}

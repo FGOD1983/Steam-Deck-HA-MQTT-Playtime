@@ -1,0 +1,53 @@
+type: markdown
+content: >-
+  <center> <b> 🎮 Steam Deck Bibliotheek<br> Totaal aantal games gespeeld: {{
+  states('sensor.steam_deck_game_playtime') }} <br><br> 🏆 Top 5 Meest
+  Gespeeld<br><br> </b>
+
+
+  | Game | Speeltijd | 
+
+  | :--- | :--- | 
+
+  {%- set attr = state_attr('sensor.steam_deck_game_playtime', 'games') -%} {%-
+  if attr is not none -%}
+    {%- set library = attr if attr is mapping else attr | from_json -%}
+    {%- set ns = namespace(clean_list=[]) -%}
+    {%- for game, data in library.items() -%}
+      {%- set s = data.seconds if data is mapping else data -%}
+      {%- set lp = data.last_played if data is mapping else '2000-01-01T00:00:00' -%}
+      {%- set ns.clean_list = ns.clean_list + [{'name': game, 'seconds': s | float, 'last_played': lp}] -%}
+    {%- endfor -%}
+    {%- for item in (ns.clean_list | sort(attribute='seconds', reverse=True))[:5] -%}
+      {%- set uren = (item.seconds / 3600) | int -%}
+      {%- set minuten = ((item.seconds % 3600) / 60) | int %}
+  | {{ item.name }} | {{ uren }}u {{ minuten }}m |
+    {%- endfor %}
+  {%- endif %}
+
+
+  <b>🕒 Laatst Gespeeld<br></b> 
+
+
+  | Game | Datum & Tijd | 
+
+  | :--- | :--- | 
+
+  {%- if attr is not none -%}
+    {%- for item in (ns.clean_list | sort(attribute='last_played', reverse=True))[:5] -%}
+      {# Hier passen we het formaat aan naar Dag-Maand om Uur:Minuut #}
+      {%- set dt = as_timestamp(item.last_played) | timestamp_custom('%d-%m %H:%M', true) %}
+  | {{ item.name }} | {{ dt if item.last_played != '2000-01-01T00:00:00' else
+  '---' }} |
+    {%- endfor %}
+    
+    ---
+    {%- set totaal_sec = ns.clean_list | map(attribute='seconds') | sum -%}
+    {%- set tot_u = (totaal_sec / 3600) | int -%}
+    {%- set tot_m = ((totaal_sec % 3600) / 60) | int %}
+  **TOTAAL: {{ tot_u }}u {{ tot_m }}m** {%- endif %} </center>
+card_mod:
+  style: |
+    ha-card {
+      background: rgba(0,0,0,0.95);
+    }

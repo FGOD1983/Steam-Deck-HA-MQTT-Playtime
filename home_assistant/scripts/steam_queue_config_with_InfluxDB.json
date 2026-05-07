@@ -1,0 +1,12 @@
+{
+    "ha_token": "your_long_lived_access_token_here",
+    "ha_url": "http://localhost:8123",
+    "queue_file": "/config/steam_queue.json",
+    "library_file": "/config/www/steam_library.json",
+    "port": 8098,
+    "steam_api_delay": 180,
+    "influxdb_url": "http://localhost:8086",
+    "influxdb_db": "steamdeck",
+    "influxdb_user": "your_influxdb_user",
+    "influxdb_password": "your_influxdb_password"
+}

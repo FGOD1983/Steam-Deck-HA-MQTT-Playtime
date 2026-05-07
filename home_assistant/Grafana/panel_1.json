@@ -1,0 +1,113 @@
+{
+  "id": 2,
+  "type": "bargauge",
+  "title": "Top 10 Total Playtime ",
+  "gridPos": {
+    "x": 0,
+    "y": 0,
+    "h": 8,
+    "w": 12
+  },
+  "fieldConfig": {
+    "defaults": {
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "light-yellow",
+            "value": null
+          },
+          {
+            "color": "dark-green",
+            "value": 60
+          }
+        ]
+      },
+      "color": {
+        "mode": "thresholds"
+      },
+      "displayName": "${__field.labels.game}"
+    },
+    "overrides": []
+  },
+  "transformations": [
+    {
+      "id": "labelsToFields",
+      "options": {
+        "mode": "columns",
+        "valueLabel": "game"
+      }
+    },
+    {
+      "id": "reduce",
+      "options": {
+        "includeTimeField": false,
+        "labelsToFields": true,
+        "mode": "seriesToRows",
+        "reducers": [
+          "last"
+        ]
+      }
+    },
+    {
+      "id": "sortBy",
+      "options": {
+        "fields": {},
+        "sort": [
+          {
+            "desc": true,
+            "field": "Last"
+          }
+        ]
+      }
+    },
+    {
+      "id": "limit",
+      "options": {}
+    }
+  ],
+  "pluginVersion": "12.3.0",
+  "targets": [
+    {
+      "alias": "",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "ffj5j02qepfcwc"
+      },
+      "hide": false,
+      "query": "SELECT last(\"total_seconds\") / 3600 AS \"hours\"\nFROM \"steamdeck\".\"autogen\".\"playtime\" \nWHERE time > 0\nGROUP BY \"game\"",
+      "rawQuery": true,
+      "refId": "A",
+      "resultFormat": "logs"
+    }
+  ],
+  "datasource": {
+    "type": "influxdb",
+    "uid": "ffj5j02qepfcwc"
+  },
+  "options": {
+    "reduceOptions": {
+      "values": true,
+      "calcs": [
+        "last"
+      ],
+      "fields": ""
+    },
+    "orientation": "horizontal",
+    "legend": {
+      "showLegend": false,
+      "displayMode": "table",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "displayMode": "gradient",
+    "valueMode": "color",
+    "namePlacement": "auto",
+    "showUnfilled": true,
+    "sizing": "auto",
+    "minVizWidth": 8,
+    "minVizHeight": 16,
+    "maxVizHeight": 300
+  }
+}

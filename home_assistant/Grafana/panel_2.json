@@ -1,0 +1,140 @@
+{
+  "id": 5,
+  "type": "bargauge",
+  "title": "Time Played (Current Week)",
+  "gridPos": {
+    "x": 0,
+    "y": 8,
+    "h": 8,
+    "w": 12
+  },
+  "fieldConfig": {
+    "defaults": {
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "semi-dark-orange",
+            "value": null
+          },
+          {
+            "color": "dark-green",
+            "value": 3
+          }
+        ]
+      },
+      "decimals": 2,
+      "min": 0,
+      "unit": "hours"
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Grand Total"
+        },
+        "properties": [
+          {
+            "id": "color",
+            "value": {
+              "fixedColor": "blue",
+              "mode": "fixed"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "transformations": [
+    {
+      "id": "labelsToFields",
+      "options": {
+        "mode": "columns",
+        "valueLabel": "game"
+      }
+    },
+    {
+      "id": "merge",
+      "options": {}
+    },
+    {
+      "id": "sortBy",
+      "options": {
+        "sort": [
+          {
+            "desc": true,
+            "field": "Last"
+          }
+        ]
+      }
+    },
+    {
+      "id": "organize",
+      "options": {
+        "excludeByName": {},
+        "includeByName": {},
+        "indexByName": {
+          "Time": 0,
+          "Value": 2,
+          "game": 1
+        },
+        "orderBy": [
+          {
+            "desc": true,
+            "type": "name"
+          }
+        ],
+        "orderByMode": "auto",
+        "renameByName": {}
+      }
+    }
+  ],
+  "pluginVersion": "12.3.0",
+  "targets": [
+    {
+      "alias": "$tag_game",
+      "query": "SELECT sum(\"session_seconds\") / 3600 FROM \"steamdeck\".\"autogen\".\"playtime\" WHERE $timeFilter GROUP BY \"game\"",
+      "rawQuery": true,
+      "refId": "A",
+      "resultFormat": "time_series"
+    },
+    {
+      "alias": "Grand Total",
+      "query": "SELECT sum(\"session_seconds\") / 3600 AS \"Grand Total\" FROM \"steamdeck\".\"autogen\".\"playtime\" WHERE $timeFilter",
+      "rawQuery": true,
+      "refId": "B",
+      "resultFormat": "time_series"
+    }
+  ],
+  "datasource": {
+    "type": "influxdb",
+    "uid": "ffj5j02qepfcwc"
+  },
+  "options": {
+    "reduceOptions": {
+      "values": true,
+      "calcs": [
+        "last"
+      ],
+      "fields": ""
+    },
+    "orientation": "horizontal",
+    "legend": {
+      "showLegend": false,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "displayMode": "gradient",
+    "valueMode": "color",
+    "namePlacement": "auto",
+    "showUnfilled": true,
+    "sizing": "auto",
+    "minVizWidth": 8,
+    "minVizHeight": 16,
+    "maxVizHeight": 300,
+    "stacking": "none"
+  },
+  "timeFrom": "now/w"
+}

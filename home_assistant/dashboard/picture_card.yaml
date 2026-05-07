@@ -1,0 +1,461 @@
+type: vertical-stack
+cards:
+  - type: conditional
+    conditions:
+      - condition: screen
+        media_query: (pointer:coarse)
+    card:
+      type: vertical-stack
+      cards:
+        - type: picture-elements
+          image: /local/steamdeck.png
+          elements:
+            - type: image
+              entity: image.steamdeck_active_game_cover
+              style:
+                top: 43%
+                left: 50%
+                width: 180px
+                height: 100px
+                transform: translate(-50%, -50%)
+              card_mod:
+                style: |
+                  hui-image {
+                    position: relative;
+                  }
+                  hui-image::after {
+                    content: "";
+                    position: absolute;
+                    inset: 0;
+                    background: rgba(0,0,0,
+                      {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
+                         and states('sensor.steam_deck_cover_url').startswith('http') %}
+                        0.5
+                      {% else %}
+                        1.0
+                      {% endif %}
+                    );
+                    pointer-events: none;
+                  }
+            - type: custom:button-card
+              entity: sensor.steam_deck_network_display
+              style:
+                top: 16%
+                left: 34%
+                transform: translateX(-50%)
+              show_name: false
+              show_state: false
+              icon: |
+                [[[
+                  var s = states['sensor.steam_deck_network_display'].state;
+                  if (!s || s === 'unknown' || s === 'unavailable') return 'mdi:lan-disconnect';
+                  if (s === 'Ethernet') return 'mdi:ethernet';
+                  return 'mdi:wifi';
+                ]]]
+              styles:
+                icon:
+                  - color: |
+                      [[[
+                        var s = states['sensor.steam_deck_network_display'].state;
+                        if (!s || s === 'unknown' || s === 'unavailable') return 'grey';
+                        return 'green';
+                      ]]]
+                  - width: 24px
+                  - height: 24px
+                  - filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5))
+                card:
+                  - background: none
+                  - border: none
+                  - box-shadow: none
+                  - padding: 0
+                  - border-radius: 0
+            - type: state-label
+              entity: sensor.steam_deck_network_display
+              style:
+                top: 24%
+                left: 34%
+                transform: translateX(-50%)
+                text-align: center
+                display: inline-block
+                min-width: 0
+                font-size: 10px
+            - type: custom:button-card
+              entity: sensor.steam_deck_battery
+              style:
+                top: 16%
+                left: 66.5%
+                transform: translateX(-50%)
+              tap_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              hold_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              show_name: false
+              show_state: false
+              icon: |
+                [[[
+                  var b = parseInt(states['sensor.steam_deck_battery'].state);
+                  if (isNaN(b)) return 'mdi:battery-unknown';
+                  if (b >= 100) return 'mdi:battery';
+                  if (b >= 90)  return 'mdi:battery-90';
+                  if (b >= 70)  return 'mdi:battery-70';
+                  if (b >= 50)  return 'mdi:battery-50';
+                  if (b >= 30)  return 'mdi:battery-30';
+                  if (b >= 10)  return 'mdi:battery-10';
+                  return 'mdi:battery-outline';
+                ]]]
+              styles:
+                icon:
+                  - color: |
+                      [[[
+                        var b = parseInt(states['sensor.steam_deck_battery'].state);
+                        if (isNaN(b)) return 'grey';
+                        if (b > 60)  return 'green';
+                        if (b > 20)  return 'orange';
+                        return 'red';
+                      ]]]
+                  - width: 24px
+                  - height: 24px
+                card:
+                  - background: none
+                  - border: none
+                  - box-shadow: none
+                  - padding: 0
+            - type: state-label
+              entity: sensor.steam_deck_battery_display
+              style:
+                top: 24%
+                left: 67%
+                transform: translateX(-50%)
+                text-align: center
+                display: inline-block
+                min-width: 0
+                font-size: 10px
+              tap_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              hold_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+            - type: custom:button-card
+              entity: sensor.steam_deck_dock_status_display
+              style:
+                top: 60%
+                left: 34%
+                transform: translateX(-50%)
+              show_name: false
+              show_state: false
+              icon: |
+                [[[
+                  return entity.attributes.icon;
+                ]]]
+              styles:
+                icon:
+                  - color: |
+                      [[[
+                        var s = states['sensor.steam_deck_dock_status_display'].state;
+                        if (!s || s === 'unknown' || s === 'unavailable') return 'grey';
+                        if (s === 'Docked') return 'deepskyblue';
+                        return 'lightskyblue';
+                      ]]]
+                  - width: 24px
+                  - height: 24px
+                  - filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5))
+                card:
+                  - background: none
+                  - border: none
+                  - box-shadow: none
+                  - padding: 0
+                  - border-radius: 0
+            - type: custom:button-card
+              entity: sensor.steam_deck_charging_display
+              style:
+                top: 58%
+                left: 67%
+                transform: translateX(-50%)
+              show_name: false
+              show_state: false
+              icon: |
+                [[[
+                  return entity.attributes.icon;
+                ]]]
+              styles:
+                icon:
+                  - color: |
+                      [[[
+                        var s = states['sensor.steam_deck_charging_display'].state;
+                        if (!s || s === 'unknown' || s === 'unavailable') return 'grey';
+                        if (s === 'Fully-charged') return 'green';
+                        if (s === 'Charging') return 'deepskyblue';
+                        if (s === 'Battery Protection') return 'mediumpurple';
+                        if (s === 'Discharging') return 'orange';
+                        return 'grey';
+                      ]]]
+                  - width: 24px
+                  - height: 24px
+                  - filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5))
+                card:
+                  - background: none
+                  - border: none
+                  - box-shadow: none
+                  - padding: 0
+                  - border-radius: 0
+            - type: state-icon
+              entity: sensor.steam_deck_active_game_display
+              style:
+                top: 45%
+                left: 50%
+                transform: translate(-50%, -100%)
+                filter: >-
+                  brightness(0) invert(1) opacity(0.6) drop-shadow(1px 1px 1px
+                  rgba(0,0,0,0.5))
+            - type: state-label
+              entity: sensor.steam_deck_active_game_display
+              style:
+                top: 37%
+                left: 50%
+                transform: translate(-50%, -0%)
+                text-align: center
+                color: white
+                display: inline-block
+                min-width: 0
+                white-space: normal
+                width: 180px
+              card_mod:
+                style: |
+                  div {
+                    white-space: unset !important;
+                    line-height: 1.1;
+                    padding-top: 0.3em;
+                      }
+  - type: conditional
+    conditions:
+      - condition: screen
+        media_query: (pointer:fine)
+    card:
+      type: vertical-stack
+      cards:
+        - type: picture-elements
+          image: /local/steamdeck.png
+          elements:
+            - type: image
+              entity: image.steamdeck_active_game_cover
+              style:
+                top: 43%
+                left: 50%
+                width: 200px
+                height: 120px
+                transform: translate(-50%, -50%)
+              card_mod:
+                style: |
+                  hui-image {
+                    position: relative;
+                  }
+                  hui-image::after {
+                    content: "";
+                    position: absolute;
+                    inset: 0;
+                    background: rgba(0,0,0,
+                      {% if states('image.steamdeck_active_game_cover') != 'unavailable' 
+                         and states('sensor.steam_deck_cover_url').startswith('http') %}
+                        0.5
+                      {% else %}
+                        1.0
+                      {% endif %}
+                    );
+                    pointer-events: none;
+                  }
+            - type: custom:button-card
+              entity: sensor.steam_deck_network_display
+              style:
+                top: 16%
+                left: 34%
+                transform: translateX(-50%)
+              show_name: false
+              show_state: false
+              icon: |
+                [[[
+                  var s = states['sensor.steam_deck_network_display'].state;
+                  if (!s || s === 'unknown' || s === 'unavailable') return 'mdi:lan-disconnect';
+                  if (s === 'Ethernet') return 'mdi:ethernet';
+                  return 'mdi:wifi';
+                ]]]
+              styles:
+                icon:
+                  - color: |
+                      [[[
+                        var s = states['sensor.steam_deck_network_display'].state;
+                        if (!s || s === 'unknown' || s === 'unavailable') return 'grey';
+                        return 'green';
+                      ]]]
+                  - width: 24px
+                  - height: 24px
+                  - filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5))
+                card:
+                  - background: none
+                  - border: none
+                  - box-shadow: none
+                  - padding: 0
+                  - border-radius: 0
+            - type: state-label
+              entity: sensor.steam_deck_network_display
+              style:
+                top: 24%
+                left: 34%
+                transform: translateX(-50%)
+                text-align: center
+                display: inline-block
+                min-width: 0
+                font-size: 10px
+            - type: custom:button-card
+              entity: sensor.steam_deck_battery
+              style:
+                top: 16%
+                left: 66.5%
+                transform: translateX(-50%)
+              tap_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              hold_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              show_name: false
+              show_state: false
+              icon: |
+                [[[
+                  var b = parseInt(states['sensor.steam_deck_battery'].state);
+                  if (isNaN(b)) return 'mdi:battery-unknown';
+                  if (b >= 100) return 'mdi:battery';
+                  if (b >= 90)  return 'mdi:battery-90';
+                  if (b >= 70)  return 'mdi:battery-70';
+                  if (b >= 50)  return 'mdi:battery-50';
+                  if (b >= 30)  return 'mdi:battery-30';
+                  if (b >= 10)  return 'mdi:battery-10';
+                  return 'mdi:battery-outline';
+                ]]]
+              styles:
+                icon:
+                  - color: |
+                      [[[
+                        var b = parseInt(states['sensor.steam_deck_battery'].state);
+                        if (isNaN(b)) return 'grey';
+                        if (b > 60)  return 'green';
+                        if (b > 20)  return 'orange';
+                        return 'red';
+                      ]]]
+                  - width: 24px
+                  - height: 24px
+                card:
+                  - background: none
+                  - border: none
+                  - box-shadow: none
+                  - padding: 0
+            - type: state-label
+              entity: sensor.steam_deck_battery_display
+              style:
+                top: 24%
+                left: 67%
+                transform: translateX(-50%)
+                text-align: center
+                display: inline-block
+                min-width: 0
+                font-size: 10px
+              tap_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+              hold_action:
+                action: more-info
+                entity: sensor.steam_deck_battery
+            - type: custom:button-card
+              entity: sensor.steam_deck_dock_status_display
+              style:
+                top: 60%
+                left: 34%
+                transform: translateX(-50%)
+              show_name: false
+              show_state: false
+              icon: |
+                [[[
+                  return entity.attributes.icon;
+                ]]]
+              styles:
+                icon:
+                  - color: |
+                      [[[
+                        var s = states['sensor.steam_deck_dock_status_display'].state;
+                        if (!s || s === 'unknown' || s === 'unavailable') return 'grey';
+                        if (s === 'Docked') return 'deepskyblue';
+                        return 'lightskyblue';
+                      ]]]
+                  - width: 24px
+                  - height: 24px
+                  - filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5))
+                card:
+                  - background: none
+                  - border: none
+                  - box-shadow: none
+                  - padding: 0
+                  - border-radius: 0
+            - type: custom:button-card
+              entity: sensor.steam_deck_charging_display
+              style:
+                top: 60%
+                left: 67%
+                transform: translateX(-50%)
+              show_name: false
+              show_state: false
+              icon: |
+                [[[
+                  return entity.attributes.icon;
+                ]]]
+              styles:
+                icon:
+                  - color: |
+                      [[[
+                        var s = states['sensor.steam_deck_charging_display'].state;
+                        if (!s || s === 'unknown' || s === 'unavailable') return 'grey';
+                        if (s === 'Fully-charged') return 'green';
+                        if (s === 'Charging') return 'deepskyblue';
+                        if (s === 'Battery Protection') return 'mediumpurple';
+                        if (s === 'Discharging') return 'orange';
+                        return 'grey';
+                      ]]]
+                  - width: 24px
+                  - height: 24px
+                  - filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5))
+                card:
+                  - background: none
+                  - border: none
+                  - box-shadow: none
+                  - padding: 0
+                  - border-radius: 0
+            - type: state-icon
+              entity: sensor.steam_deck_active_game_display
+              style:
+                top: 45%
+                left: 50%
+                transform: translate(-50%, -100%)
+                filter: >-
+                  brightness(0) invert(1) opacity(0.6) drop-shadow(1px 1px 1px
+                  rgba(0,0,0,0.5))
+            - type: state-label
+              entity: sensor.steam_deck_active_game_display
+              style:
+                top: 39%
+                left: 50%
+                transform: translate(-50%, -0%)
+                text-align: center
+                color: white
+                display: inline-block
+                min-width: 0
+                white-space: normal
+                width: 180px
+              card_mod:
+                style: |
+                  div {
+                    white-space: unset !important;
+                    line-height: 1.1;
+                    padding-top: 0.3em;
+                      }
+

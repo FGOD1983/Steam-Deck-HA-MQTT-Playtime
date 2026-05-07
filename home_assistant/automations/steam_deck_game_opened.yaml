@@ -1,0 +1,57 @@
+alias: Steam Deck - Game Opened
+description: >
+  Posts game start event to the queue processor service and sets up session
+  helpers for reboot resilience and cover art.
+triggers:
+  - entity_id: sensor.steam_deck_active_game_display
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >
+      {% set sensor = states.sensor.steam_deck_game_playtime %} {{ sensor is not
+      none and sensor.state != 'unavailable' and
+      state_attr('sensor.steam_deck_game_playtime', 'games') is not none }}
+  - condition: template
+    value_template: >
+      {% set ignore = ['unknown', 'unavailable', 'none', 'idle', 'offline', 'not
+      playing', 'no game opened'] %} {{ trigger.to_state.state | lower | trim
+      not in ignore }}
+actions:
+  - delay: "00:00:02"
+  - variables:
+      current_appid: "{{ states('sensor.steam_deck_appid') | trim }}"
+      current_game_type: "{{ states('sensor.steam_deck_game_type') | trim }}"
+      current_game_name: "{{ trigger.to_state.state | trim }}"
+      start_time: "{{ now().isoformat() }}"
+  - action: shell_command.post_game_start
+    data:
+      game_name: "{{ current_game_name }}"
+      appid: "{{ current_appid }}"
+      game_type: "{{ current_game_type }}"
+      start_time: "{{ start_time }}"
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.steam_deck_sessie_starttijd
+    data:
+      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.steam_deck_huidige_game
+    data:
+      value: "{{ current_game_name }}"
+  - action: input_boolean.turn_on
+    target:
+      entity_id: input_boolean.steam_deck_sessie_actief
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.steam_pending_appid
+    data:
+      value: "{{ current_appid }}"
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.steam_pending_game_type
+    data:
+      value: "{{ current_game_type }}"
+mode: queued
+max: 10
+

@@ -1,0 +1,114 @@
+alias: Steam Deck - Fetch Game Cover
+description: ""
+triggers:
+  - entity_id: sensor.steam_deck_active_game_display
+    trigger: state
+actions:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |
+              {{ trigger.to_state.state not in 
+                 ['No game opened', 'Offline', 'unavailable', 'unknown', 'none', ''] }}
+        sequence:
+          - delay: "00:00:02"
+          - if:
+              - condition: template
+                value_template: >
+                  {% set expiry = states('input_text.igdb_token_expiry') %} {%
+                  set token = states('input_text.igdb_bearer_token') %} {% if
+                  token in ['', 'none', 'unknown', 'unavailable'] %}
+                    true
+                  {% elif expiry in ['', 'none', 'unknown', 'unavailable'] %}
+                    true
+                  {% else %}
+                    {{ (as_datetime(expiry) - now()).days < 7 }}
+                  {% endif %}
+            then:
+              - data:
+                  client_id: "{{ states('input_text.igdb_client_id') }}"
+                  client_secret: "{{ states('input_text.igdb_client_secret') }}"
+                response_variable: token_response
+                action: shell_command.refresh_igdb_token
+              - variables:
+                  new_token: "{{ (token_response.stdout | from_json).access_token }}"
+                  new_expiry: >
+                    {{ (now() + timedelta(seconds=(token_response.stdout |
+                    from_json).expires_in)).isoformat() }}
+              - target:
+                  entity_id: input_text.igdb_bearer_token
+                data:
+                  value: "{{ new_token }}"
+                action: input_text.set_value
+              - target:
+                  entity_id: input_text.igdb_token_expiry
+                data:
+                  value: "{{ new_expiry }}"
+                action: input_text.set_value
+          - if:
+              - condition: template
+                value_template: |
+                  {{ states('sensor.steam_deck_game_type') == 'Steam Native'
+                     and states('sensor.steam_deck_appid') not in ['', 'unknown', 'unavailable', 'none'] }}
+            then:
+              - variables:
+                  current_appid: "{{ states('sensor.steam_deck_appid') }}"
+              - action: shell_command.check_steam_image
+                data:
+                  url: >-
+                    https://cdn.cloudflare.steamstatic.com/steam/apps/{{
+                    current_appid }}/capsule_616x353.jpg
+                response_variable: image_check
+              - target:
+                  entity_id: input_text.steam_pending_image_type
+                data:
+                  value: "{{ 'capsule' if image_check.stdout == '200' else 'header' }}"
+                action: input_text.set_value
+              - target:
+                  entity_id: image.steamdeck_active_game_cover
+                action: homeassistant.update_entity
+            else:
+              - data:
+                  client_id: "{{ states('input_text.igdb_client_id') }}"
+                  bearer_token: "{{ states('input_text.igdb_bearer_token') }}"
+                  game_name: "{{ trigger.to_state.state }}"
+                response_variable: igdb_response
+                action: shell_command.fetch_igdb_cover
+              - target:
+                  entity_id: input_text.steam_deck_game_cover_url
+                data:
+                  value: |
+                    {% set content = igdb_response.stdout %} {% if content %}
+                      {% set result = content | from_json %}
+                      {% if result | length > 0 and result[0].cover is defined %}
+                        https:{{ result[0].cover.url | replace('t_thumb', 't_cover_big') }}
+                      {% else %}
+                        none
+                      {% endif %}
+                    {% else %}
+                      none
+                    {% endif %}
+                action: input_text.set_value
+              - target:
+                  entity_id: image.steamdeck_active_game_cover
+                action: homeassistant.update_entity
+      - conditions:
+          - condition: template
+            value_template: |
+              {{ trigger.to_state.state in 
+                 ['No game opened', 'Offline', 'unavailable', 'unknown', 'none', ''] }}
+        sequence:
+          - target:
+              entity_id: input_text.steam_deck_game_cover_url
+            data:
+              value: none
+            action: input_text.set_value
+          - target:
+              entity_id: input_text.steam_pending_image_type
+            data:
+              value: none
+            action: input_text.set_value
+          - target:
+              entity_id: image.steamdeck_active_game_cover
+            action: homeassistant.update_entity
+mode: single

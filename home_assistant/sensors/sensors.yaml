@@ -1,0 +1,16 @@
+  - platform: rest
+    name: "Steam Deck Game Playtime"
+    unique_id: steam_deck_game_playtime
+    # 127.0.0.1 is altijd de HA server zelf, ongeacht je URL
+    resource: "http://homeassistant.local:8123/local/steam_library.json"
+    value_template: >
+      {% if value_json is defined and value_json.games is defined %}
+        {{ value_json.games | length }}
+      {% else %}
+        {{ states('sensor.steam_deck_game_playtime') }}
+      {% endif %}
+    json_attributes:
+      - games
+    verify_ssl: false
+    timeout: 10
+    scan_interval: 20

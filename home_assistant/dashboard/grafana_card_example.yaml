@@ -1,0 +1,6 @@
+type: iframe
+url: >-
+  https://{HA-URL}:8182/api/hassio_ingress/z5QX5JsohzG9Zllzv97zuHWdEhoeSUIqDeWTZBYDnF8/d-solo/addxj8v/steam-deck?orgId=1&from=now-6h&to=now&timezone=browser&panelId=panel-2&__feature.dashboardSceneSolo=true
+aspect_ratio: 75%
+hide_background: true
+

@@ -1,0 +1,168 @@
+{
+  "id": 6,
+  "type": "timeseries",
+  "title": "Playtime Increase This Week",
+  "gridPos": {
+    "x": 0,
+    "y": 16,
+    "h": 8,
+    "w": 12
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineInterpolation": "smooth",
+        "barAlignment": 0,
+        "barWidthFactor": 0.6,
+        "lineWidth": 2,
+        "fillOpacity": 0,
+        "gradientMode": "opacity",
+        "spanNulls": true,
+        "insertNulls": false,
+        "showPoints": "always",
+        "showValues": false,
+        "pointSize": 5,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        },
+        "axisPlacement": "auto",
+        "axisLabel": "",
+        "axisColorMode": "series",
+        "axisBorderShow": false,
+        "scaleDistribution": {
+          "type": "linear"
+        },
+        "axisCenteredZero": false,
+        "hideFrom": {
+          "tooltip": false,
+          "viz": false,
+          "legend": false
+        },
+        "thresholdsStyle": {
+          "mode": "off"
+        },
+        "lineStyle": {
+          "fill": "solid"
+        }
+      },
+      "color": {
+        "mode": "palette-classic"
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "blue",
+            "value": null
+          }
+        ]
+      },
+      "fieldMinMax": false,
+      "links": [],
+      "unit": "hours"
+    },
+    "overrides": []
+  },
+  "transformations": [
+    {
+      "id": "labelsToFields",
+      "options": {
+        "valueLabel": "game"
+      }
+    }
+  ],
+  "pluginVersion": "12.3.0",
+  "targets": [
+    {
+      "alias": "$tag_name",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "000000002"
+      },
+      "groupBy": [
+        {
+          "params": [
+            "$__interval"
+          ],
+          "type": "time"
+        },
+        {
+          "params": [
+            "hostname"
+          ],
+          "type": "tag"
+        },
+        {
+          "params": [
+            "linear"
+          ],
+          "type": "fill"
+        }
+      ],
+      "hide": false,
+      "measurement": "snmp",
+      "orderByTime": "ASC",
+      "policy": "default",
+      "query": "SELECT cumulative_sum(sum(\"session_seconds\")) / 3600 AS \"total_hours\"\nFROM \"steamdeck\".\"autogen\".\"playtime\"\nWHERE $timeFilter\nGROUP BY time($__interval), \"game\" fill(0)",
+      "rawQuery": true,
+      "refId": "A",
+      "resultFormat": "time_series",
+      "select": [
+        [
+          {
+            "params": [
+              "value"
+            ],
+            "type": "field"
+          },
+          {
+            "params": [],
+            "type": "mean"
+          },
+          {
+            "params": [
+              " / 10"
+            ],
+            "type": "math"
+          }
+        ]
+      ],
+      "tags": [
+        {
+          "key": "hostname",
+          "operator": "=~",
+          "value": "/powerbar.*.$DC_identifier.transip.io/"
+        },
+        {
+          "condition": "AND",
+          "key": "metric",
+          "operator": "=",
+          "value": "PDU2-MIB::measurementsExternalSensorValue.1.1"
+        }
+      ]
+    }
+  ],
+  "datasource": {
+    "type": "influxdb",
+    "uid": "ffj5j02qepfcwc"
+  },
+  "interval": "12h",
+  "options": {
+    "tooltip": {
+      "mode": "multi",
+      "sort": "none",
+      "hideZeros": false
+    },
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    }
+  },
+  "timeFrom": "now/w",
+  "hideTimeOverride": false
+}
