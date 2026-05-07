@@ -7,12 +7,21 @@ Steam Deck HA integration.
 
 Runs as a background process on Home Assistant OS, started by a HA automation
 on homeassistant_start and monitored by a watchdog automation every 5 minutes.
+
+New in this version:
+  - /process_deck_queue endpoint receives the playtime queue from the Steam Deck
+    via MQTT → HA automation → HTTP POST
+  - Processes closed sessions using localconfig.vdf playtime as source of truth
+    (end_playtime * 60 = total seconds, (end_playtime - start_playtime) * 60 = session seconds)
+  - Publishes MQTT ACK per session_id after successful processing
+  - Tracks in-flight session_ids to prevent double processing
 """
 
 import json
 import logging
 import os
 import queue
+import ssl
 import threading
 import time
 import urllib.request
@@ -20,6 +29,8 @@ import urllib.error
 import urllib.parse
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import paho.mqtt.client as mqtt_client
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -46,11 +57,29 @@ def load_config():
         log.error(f"Failed to load config: {e}")
         exit(1)
 
+# ── In-flight session tracking (prevents double processing) ───────────────────
+# Holds session_ids currently being processed or already ACK'd this run.
+# This is in-memory only — on restart it starts fresh, which is fine since
+# the Deck queue will resend any unACK'd sessions and they will be reprocessed.
+in_flight_lock = threading.Lock()
+in_flight_sessions = set()
+
+def is_in_flight(session_id):
+    with in_flight_lock:
+        return session_id in in_flight_sessions
+
+def mark_in_flight(session_id):
+    with in_flight_lock:
+        in_flight_sessions.add(session_id)
+
+def unmark_in_flight(session_id):
+    with in_flight_lock:
+        in_flight_sessions.discard(session_id)
+
 # ── Queue file helpers ─────────────────────────────────────────────────────────
 queue_file_lock = threading.Lock()
 
 def read_queue_file():
-    """Read the queue file, return list of entries. Returns [] if file missing or empty."""
     path = config['queue_file']
     if not os.path.exists(path):
         return []
@@ -63,7 +92,6 @@ def read_queue_file():
             return []
 
 def write_queue_file(entries):
-    """Write entries to queue file atomically using a temp file."""
     path = config['queue_file']
     tmp_path = path + '.tmp'
     with open(tmp_path, 'w') as f:
@@ -71,7 +99,6 @@ def write_queue_file(entries):
     os.replace(tmp_path, path)
 
 def append_to_queue_file(entry):
-    """Append a new entry to the queue file under lock."""
     with queue_file_lock:
         entries = read_queue_file()
         entries.append(entry)
@@ -79,7 +106,6 @@ def append_to_queue_file(entry):
     log.info(f'Appended entry to queue file: {entry["game_name"]} [{entry["state"]}]')
 
 def remove_from_queue_file(entry_id):
-    """Remove a processed entry from the queue file under lock."""
     with queue_file_lock:
         entries = read_queue_file()
         entries = [e for e in entries if e.get('entry_id') != entry_id]
@@ -88,7 +114,6 @@ def remove_from_queue_file(entry_id):
 
 # ── HA REST API helpers ────────────────────────────────────────────────────────
 def ha_get(path):
-    """GET request to HA REST API."""
     url = config['ha_url'] + '/api/' + path
     req = urllib.request.Request(url, headers={
         'Authorization': 'Bearer ' + config['ha_token'],
@@ -98,7 +123,6 @@ def ha_get(path):
         return json.loads(resp.read())
 
 def get_ha_state(entity_id):
-    """Get the state of a HA entity."""
     result = ha_get(f'states/{entity_id}')
     return result.get('state', '')
 
@@ -112,7 +136,6 @@ def get_steam_user_id():
 library_file_lock = threading.Lock()
 
 def read_library():
-    """Read steam_library.json, return games dict."""
     path = config['library_file']
     if not os.path.exists(path):
         return {}
@@ -125,7 +148,6 @@ def read_library():
             return {}
 
 def write_library(games):
-    """Write games dict to steam_library.json atomically."""
     path = config['library_file']
     tmp_path = path + '.tmp'
     with open(tmp_path, 'w') as f:
@@ -136,17 +158,11 @@ def write_library(games):
 def update_library_entry(game_name, new_seconds, start_time, stop_time):
     """
     Update a single game entry in the library under lock.
-    - start_time: ISO string of when this session started — used as first_played
-                  for new games and as last_played in the library
-    - stop_time:  ISO string of when this session ended — stored as last_played
-    - first_played is set to start_time for new games, or kept from existing entry
-    - session_count increments by 1 each session, starts at 1 for new games
     Returns the updated entry dict for use in InfluxDB write.
     """
     with library_file_lock:
         games = read_library()
 
-        # Case-insensitive match for existing entry
         matched_key = game_name
         existing_entry = {}
         for key in games.keys():
@@ -155,15 +171,10 @@ def update_library_entry(game_name, new_seconds, start_time, stop_time):
                 existing_entry = games[key] if isinstance(games[key], dict) else {}
                 break
 
-        # first_played: use existing value if present, otherwise use start_time
-        # of this session (the actual moment the game was started)
         first_played = existing_entry.get('first_played')
         if not first_played:
-            # For existing games without first_played, fall back to their
-            # existing last_played, otherwise use this session's start_time
             first_played = existing_entry.get('last_played', start_time)
 
-        # Increment session count — start at 1 if not present
         session_count = existing_entry.get('session_count', 0) + 1
 
         updated_entry = {
@@ -178,7 +189,6 @@ def update_library_entry(game_name, new_seconds, start_time, stop_time):
         return updated_entry
 
 def get_existing_seconds(game_name):
-    """Get existing playtime seconds for a game, 0 if not found."""
     games = read_library()
     for key, value in games.items():
         if key.lower() == game_name.lower():
@@ -189,40 +199,30 @@ def get_existing_seconds(game_name):
 
 # ── InfluxDB helpers ───────────────────────────────────────────────────────────
 def escape_influx_tag(value):
-    """Escape special characters in InfluxDB tag values."""
     return str(value).replace(',', r'\,').replace(' ', r'\ ').replace('=', r'\=')
 
 def escape_influx_string_field(value):
-    """Escape string field values for InfluxDB line protocol."""
     return str(value).replace('"', r'\"')
 
 def write_to_influxdb(game_name, appid, game_type, total_seconds, session_seconds,
                        session_count, first_played, last_played, start_time_dt):
-    """
-    Write a playtime data point to InfluxDB using the line protocol.
-    Tags: game, game_type, appid
-    Fields: total_seconds, session_seconds, session_count, first_played, last_played
-    Timestamp: start_time of the session (nanoseconds)
-    """
-    influxdb_url = config.get('influxdb_url')
-    influxdb_db = config.get('influxdb_db')
-    influxdb_user = config.get('influxdb_user', '')
+    influxdb_url      = config.get('influxdb_url')
+    influxdb_db       = config.get('influxdb_db')
+    influxdb_user     = config.get('influxdb_user', '')
     influxdb_password = config.get('influxdb_password', '')
 
     if not influxdb_url or not influxdb_db:
         log.warning('InfluxDB not configured, skipping write')
         return
 
-    # Convert start_time to nanoseconds timestamp for InfluxDB
     timestamp_ns = int(start_time_dt.timestamp() * 1_000_000_000)
 
-    # Build line protocol string
-    tag_game = escape_influx_tag(game_name)
+    tag_game      = escape_influx_tag(game_name)
     tag_game_type = escape_influx_tag(game_type)
-    tag_appid = escape_influx_tag(appid if appid else '')
+    tag_appid     = escape_influx_tag(appid if appid else '')
 
     field_first_played = escape_influx_string_field(first_played)
-    field_last_played = escape_influx_string_field(last_played)
+    field_last_played  = escape_influx_string_field(last_played)
 
     line = (
         f'playtime,'
@@ -244,11 +244,7 @@ def write_to_influxdb(game_name, appid, game_type, total_seconds, session_second
             'p': influxdb_password
         })
         url = f'{influxdb_url}/write?{params}'
-        req = urllib.request.Request(
-            url,
-            data=line.encode('utf-8'),
-            method='POST'
-        )
+        req = urllib.request.Request(url, data=line.encode('utf-8'), method='POST')
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status == 204:
                 log.info(f'InfluxDB write successful for {game_name}')
@@ -259,8 +255,7 @@ def write_to_influxdb(game_name, appid, game_type, total_seconds, session_second
 
 # ── Steam API helpers ──────────────────────────────────────────────────────────
 def fetch_steam_playtime(appid):
-    """Fetch official total playtime in seconds from Steam API for a given appid."""
-    api_key = get_steam_api_key()
+    api_key  = get_steam_api_key()
     steam_id = get_steam_user_id()
 
     if not api_key or not steam_id:
@@ -275,8 +270,8 @@ def fetch_steam_playtime(appid):
     try:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-            games = data.get('response', {}).get('games', [])
+            data   = json.loads(resp.read())
+            games  = data.get('response', {}).get('games', [])
             for game in games:
                 if game.get('appid') == int(appid):
                     minutes = game.get('playtime_forever', 0)
@@ -285,16 +280,47 @@ def fetch_steam_playtime(appid):
         log.error(f'Error fetching Steam playtime: {e}')
     return None
 
+# ── MQTT ACK publisher ─────────────────────────────────────────────────────────
+def publish_ack(session_id):
+    """
+    Publish a retained ACK message to steamdeck/playtime/ack/<session_id>
+    so the Steam Deck script knows this session has been processed.
+    """
+    mqtt_host = config.get('mqtt_host')
+    mqtt_port = int(config.get('mqtt_port', 8883))
+    mqtt_user = config.get('mqtt_user')
+    mqtt_pass = config.get('mqtt_pass')
+
+    if not mqtt_host:
+        log.warning('MQTT not configured in config, skipping ACK publish')
+        return
+
+    topic = f"steamdeck/playtime/ack/{session_id}"
+    try:
+        client = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
+        client.username_pw_set(mqtt_user, mqtt_pass)
+        client.tls_set(cert_reqs=ssl.CERT_NONE)
+        client.tls_insecure_set(True)
+        client.connect(mqtt_host, mqtt_port, keepalive=30)
+        client.loop_start()
+        result = client.publish(topic, payload=session_id, retain=True)
+        result.wait_for_publish(timeout=5)
+        client.loop_stop()
+        client.disconnect()
+        log.info(f'ACK published for session {session_id} → {topic}')
+    except Exception as e:
+        log.error(f'Failed to publish ACK for session {session_id}: {e}')
+
 # ── Processing logic ───────────────────────────────────────────────────────────
 def process_stop_entry(entry):
-    """Process a stop entry — calculate or fetch playtime, update library and write to InfluxDB."""
-    game_name = entry['game_name']
-    appid = entry.get('appid', '')
-    game_type = entry.get('game_type', '')
+    """Process a stop entry from the existing HA automation flow."""
+    game_name       = entry['game_name']
+    appid           = entry.get('appid', '')
+    game_type       = entry.get('game_type', '')
     properly_closed = entry.get('properly_closed', False)
-    start_time = datetime.fromisoformat(entry['start_time'])
-    stop_time = datetime.fromisoformat(entry['stop_time'])
-    entry_id = entry['entry_id']
+    start_time      = datetime.fromisoformat(entry['start_time'])
+    stop_time       = datetime.fromisoformat(entry['stop_time'])
+    entry_id        = entry['entry_id']
 
     log.info(f'Processing stop: {game_name} | type={game_type} | properly_closed={properly_closed}')
 
@@ -316,46 +342,92 @@ def process_stop_entry(entry):
         else:
             log.warning(f'Steam API fetch failed for {game_name}, falling back to session calculation')
             existing_seconds = get_existing_seconds(game_name)
-            new_seconds = existing_seconds + session_seconds
+            new_seconds      = existing_seconds + session_seconds
             updated = update_library_entry(
                 game_name, new_seconds,
                 start_time=start_time.isoformat(),
                 stop_time=stop_time.isoformat()
             )
-
-        write_to_influxdb(
-            game_name=game_name,
-            appid=appid,
-            game_type=game_type,
-            total_seconds=updated['seconds'],
-            session_seconds=session_seconds,
-            session_count=updated['session_count'],
-            first_played=updated['first_played'],
-            last_played=updated['last_played'],
-            start_time_dt=start_time
-        )
     else:
         existing_seconds = get_existing_seconds(game_name)
-        new_seconds = existing_seconds + session_seconds
+        new_seconds      = existing_seconds + session_seconds
         updated = update_library_entry(
             game_name, new_seconds,
             start_time=start_time.isoformat(),
             stop_time=stop_time.isoformat()
         )
         log.info(f'Session playtime for {game_name}: {session_seconds}s added to {existing_seconds}s existing')
-        write_to_influxdb(
-            game_name=game_name,
-            appid=appid,
-            game_type=game_type,
-            total_seconds=new_seconds,
-            session_seconds=session_seconds,
-            session_count=updated['session_count'],
-            first_played=updated['first_played'],
-            last_played=updated['last_played'],
-            start_time_dt=start_time
-        )
+
+    write_to_influxdb(
+        game_name=game_name,
+        appid=appid,
+        game_type=game_type,
+        total_seconds=updated['seconds'],
+        session_seconds=session_seconds,
+        session_count=updated['session_count'],
+        first_played=updated['first_played'],
+        last_played=updated['last_played'],
+        start_time_dt=start_time
+    )
 
     remove_from_queue_file(entry_id)
+
+def process_deck_session(session):
+    """
+    Process a single closed session from the Steam Deck local queue.
+
+    Playtime source of truth is localconfig.vdf (values in minutes):
+      total_seconds   = end_playtime * 60
+      session_seconds = (end_playtime - start_playtime) * 60
+
+    After successful processing, publishes an MQTT ACK so the Deck
+    can remove this session from its local queue.
+    """
+    session_id    = session['session_id']
+    game_name     = session['name']
+    appid         = session.get('appid', '')
+    start_playtime = int(session.get('start_playtime', 0))
+    end_playtime   = int(session.get('end_playtime', 0))
+    start_time     = datetime.fromtimestamp(int(session['start_time']))
+    end_time       = datetime.fromtimestamp(int(session['end_time']))
+
+    total_seconds   = end_playtime * 60
+    session_seconds = (end_playtime - start_playtime) * 60
+
+    log.info(
+        f'Processing deck session: {game_name} | session_id={session_id} | '
+        f'start_playtime={start_playtime}m end_playtime={end_playtime}m | '
+        f'session={session_seconds}s total={total_seconds}s'
+    )
+
+    # Determine game type — appid < 0x80000000 is Steam Native
+    try:
+        game_type = 'Steam Native' if appid and int(appid) < 0x80000000 else 'Non-Steam'
+    except (ValueError, TypeError):
+        game_type = 'Non-Steam'
+
+    updated = update_library_entry(
+        game_name, total_seconds,
+        start_time=start_time.isoformat(),
+        stop_time=end_time.isoformat()
+    )
+
+    write_to_influxdb(
+        game_name=game_name,
+        appid=appid,
+        game_type=game_type,
+        total_seconds=total_seconds,
+        session_seconds=session_seconds,
+        session_count=updated['session_count'],
+        first_played=updated['first_played'],
+        last_played=updated['last_played'],
+        start_time_dt=start_time
+    )
+
+    # Publish MQTT ACK — Deck will remove this session from its local queue
+    publish_ack(session_id)
+    unmark_in_flight(session_id)
+    log.info(f'Deck session processed and ACK sent: {game_name} [{session_id}]')
 
 def process_queue_entry(entry):
     """Route a queue entry to the correct handler based on state."""
@@ -371,7 +443,6 @@ def process_queue_entry(entry):
 memory_queue = queue.Queue()
 
 def worker():
-    """Single worker thread — processes one queue entry at a time in order."""
     log.info('Worker thread started')
     while True:
         entry = memory_queue.get()
@@ -406,6 +477,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.handle_game_start(data)
         elif self.path == '/game_stop':
             self.handle_game_stop(data)
+        elif self.path == '/process_deck_queue':
+            self.handle_deck_queue(data)
         else:
             self.send_json(404, {'error': 'Not found'})
 
@@ -414,10 +487,73 @@ class RequestHandler(BaseHTTPRequestHandler):
             entries = read_queue_file()
             self.send_json(200, {
                 'queue': entries,
-                'memory_queue_size': memory_queue.qsize()
+                'memory_queue_size': memory_queue.qsize(),
+                'in_flight_sessions': list(in_flight_sessions)
             })
         else:
             self.send_json(404, {'error': 'Not found'})
+
+    def handle_deck_queue(self, data):
+        """
+        Receives the full playtime queue payload from the Steam Deck via MQTT.
+        Processes all closed sessions that are not already in-flight.
+        Opened sessions are logged but not processed — they will be handled
+        by the existing game_stop flow or by the standby/offline fallback.
+        """
+        sessions = data.get('active_sessions', [])
+        if not sessions:
+            self.send_json(200, {'status': 'ok', 'processed': 0, 'skipped': 0})
+            return
+
+        queued    = 0
+        skipped   = 0
+        opened    = 0
+
+        for session in sessions:
+            session_id  = session.get('session_id')
+            game_state  = session.get('game_state')
+            game_name   = session.get('name', 'unknown')
+
+            if not session_id:
+                log.warning('Session missing session_id, skipping')
+                skipped += 1
+                continue
+
+            if game_state == 'opened':
+                log.info(f'Deck session still open, skipping: {game_name} [{session_id}]')
+                opened += 1
+                continue
+
+            if game_state != 'closed':
+                log.warning(f'Unknown game_state "{game_state}" for session {session_id}, skipping')
+                skipped += 1
+                continue
+
+            # Validate required fields for a closed session
+            if session.get('end_playtime') is None or session.get('end_time') is None:
+                log.warning(f'Closed session {session_id} missing end data, skipping')
+                skipped += 1
+                continue
+
+            # Skip if already being processed or already processed this run
+            if is_in_flight(session_id):
+                log.info(f'Session {session_id} already in-flight, skipping duplicate')
+                skipped += 1
+                continue
+
+            # Mark as in-flight and queue for processing
+            mark_in_flight(session_id)
+            memory_queue.put({'_type': 'deck_session', 'session': session})
+            log.info(f'Queued deck session for processing: {game_name} [{session_id}]')
+            queued += 1
+
+        log.info(f'Deck queue received: {queued} queued, {skipped} skipped, {opened} still open')
+        self.send_json(200, {
+            'status': 'ok',
+            'processed': queued,
+            'skipped': skipped,
+            'still_open': opened
+        })
 
     def handle_game_start(self, data):
         required = ['game_name', 'appid', 'game_type', 'start_time']
@@ -427,11 +563,6 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         entry_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{data['appid']}"
 
-        # Check for unmatched start entry — means game was swapped without
-        # a No game opened state in between. Synthesize a stop for the previous
-        # game. For Steam Native games set properly_closed=True since the game
-        # was closed on the Deck, the script just missed the transition.
-        # For non-Steam games set properly_closed=False and use session calculation.
         with queue_file_lock:
             entries = read_queue_file()
             for existing in entries:
@@ -448,13 +579,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                     break
 
         entry = {
-            'entry_id': entry_id,
-            'game_name': data['game_name'],
-            'appid': data['appid'],
-            'game_type': data['game_type'],
-            'state': 'start',
-            'start_time': data['start_time'],
-            'stop_time': None,
+            'entry_id':       entry_id,
+            'game_name':      data['game_name'],
+            'appid':          data['appid'],
+            'game_type':      data['game_type'],
+            'state':          'start',
+            'start_time':     data['start_time'],
+            'stop_time':      None,
             'properly_closed': None
         }
 
@@ -470,15 +601,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_json(400, {'error': f'Missing fields: {required}'})
             return
 
-        # Find the matching start entry and update it to stop
         with queue_file_lock:
             entries = read_queue_file()
             matched = None
             for i, e in enumerate(entries):
                 if (e.get('state') == 'start'
                         and e.get('game_name', '').lower() == data['game_name'].lower()):
-                    entries[i]['state'] = 'stop'
-                    entries[i]['stop_time'] = data['stop_time']
+                    entries[i]['state']          = 'stop'
+                    entries[i]['stop_time']       = data['stop_time']
                     entries[i]['properly_closed'] = data['properly_closed']
                     matched = entries[i]
                     break
@@ -491,10 +621,30 @@ class RequestHandler(BaseHTTPRequestHandler):
                 log.warning(f'No matching start entry found for stop: {data["game_name"]}')
                 self.send_json(404, {'error': 'No matching start entry found'})
 
+# ── Updated worker to handle deck sessions ─────────────────────────────────────
+def worker():
+    """Single worker thread — processes one queue entry at a time in order."""
+    log.info('Worker thread started')
+    while True:
+        entry = memory_queue.get()
+        try:
+            # Deck session entries are wrapped with _type key
+            if entry.get('_type') == 'deck_session':
+                process_deck_session(entry['session'])
+            else:
+                process_queue_entry(entry)
+        except Exception as e:
+            session_id = entry.get('session', {}).get('session_id') or entry.get('entry_id')
+            log.error(f'Error processing entry {session_id}: {e}')
+            # Unmark in-flight on error so it can be retried on next Deck push
+            if entry.get('_type') == 'deck_session':
+                unmark_in_flight(entry['session'].get('session_id', ''))
+        finally:
+            memory_queue.task_done()
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 def recover_unprocessed_entries():
-    """On startup push any existing stop entries to the memory queue for processing."""
-    entries = read_queue_file()
+    entries      = read_queue_file()
     stop_entries = [e for e in entries if e.get('state') == 'stop']
     if stop_entries:
         log.info(f'Recovering {len(stop_entries)} unprocessed stop entries from queue file')
@@ -507,27 +657,21 @@ def recover_unprocessed_entries():
 def main():
     load_config()
 
-    # Ensure scripts directory exists
     os.makedirs(os.path.dirname(config['queue_file']), exist_ok=True)
 
-    # Create empty queue file if it does not exist
     if not os.path.exists(config['queue_file']):
         write_queue_file([])
         log.info('Created empty queue file')
 
-    # Recover any unprocessed entries from before restart
     recover_unprocessed_entries()
 
-    # Start single worker thread
     worker_thread = threading.Thread(target=worker, daemon=True)
     worker_thread.start()
 
-    # Start HTTP server on localhost only — not accessible externally
-    # ReusableHTTPServer prevents "Address in use" errors on restart
     class ReusableHTTPServer(HTTPServer):
         allow_reuse_address = True
 
-    port = config.get('port', 8098)
+    port   = config.get('port', 8098)
     server = ReusableHTTPServer(('127.0.0.1', port), RequestHandler)
     log.info(f'Steam queue processor listening on http://127.0.0.1:{port}')
 
