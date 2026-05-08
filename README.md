@@ -16,7 +16,7 @@ This project provides a robust way to track playtime for your entire Steam Deck 
 
 The system features a Smart Lookup engine that cleans up folder names and fetches official game titles via the Steam API, storing them in a local cache on your Deck. If needed the cache file can be edited so it will reflect the correct name in Home Assistant.
 
-## ✨ Features 
+## ✨ Features
 **🚀 Universal Detection:** Automatic detection of ROMs, eXoDOS, and Windows (.exe) games.  
 **🧠 Smart Title Resolver:** Converts mdk_v1.0_clean to MDK using the Steam Store API.  
 **🔋 System Stats:** Monitors battery percentage, charging state, and SteamOS Mode (Game vs. Desktop).  
@@ -26,10 +26,13 @@ The system features a Smart Lookup engine that cleans up folder names and fetche
 **🔄 Auto Token Refresh:** IGDB Bearer token is automatically refreshed before it expires.  
 **🕹️ Steam Native Playtime Sync:** Official Steam playtime is fetched from the Steam API after each session and used to keep your library accurate.  
 **⚡ Queue-Based Processing:** A persistent Python service handles all playtime calculations in order, preventing data corruption when switching games rapidly.  
+**📋 Local Session Queue:** The Steam Deck maintains a local `playtime_queue.json` file that tracks open and closed game sessions with localconfig.vdf playtime snapshots, enabling accurate tracking even during offline play.  
+**🔁 Offline-Resilient Session Sync:** Closed sessions are queued locally on the Deck and synced to Home Assistant via MQTT as soon as a connection is available. Home Assistant processes each session and sends an ACK back to the Deck to confirm it was written to the library and InfluxDB.  
+**📦 Non-Steam Playtime from localconfig.vdf:** Non-Steam game playtime is read directly from Steam's local `localconfig.vdf` file, giving accurate totals that match what Steam itself displays in Game Mode.  
 
 By using a Python script on the Steam Deck and a persistent queue processor service in Home Assistant, your playtime data remains accurate even if Home Assistant reboots during a gaming session or you switch games rapidly.
 
-*Note: This system requires an active local network connection between your Steam Deck and your MQTT broker to function.*
+*Note: This system requires an active local network connection between your Steam Deck and your MQTT broker to function. Sessions started or closed while offline are queued locally and synced automatically when connectivity is restored.*
 
 ## 🛠 Prerequisites
 * MQTT Broker: A running broker (like Mosquitto) integrated with Home Assistant.  
@@ -48,8 +51,10 @@ mkdir -p ~/scripts
 
 # Set up a Python Virtual Environment to keep the system clean
 python -m venv ~/mqtt-env
-~/mqtt-env/bin/pip install paho-mqtt requests psutil
+~/mqtt-env/bin/pip install paho-mqtt requests psutil vdf
 ```
+
+> ℹ️ The `vdf` library is required for reading Steam's local `localconfig.vdf` and `shortcuts.vdf` files to track non-Steam game playtime.
 
 ### 1.2 Create the Script
 
@@ -73,6 +78,33 @@ systemctl --user enable steamdeck_mqtt_offline.service
 systemctl --user enable steamdeck_mqtt_boot.service
 systemctl --user enable --now steamdeck_mqtt_update.timer
 ```
+
+### 1.4 Local Session Queue
+
+The script automatically maintains a local session queue file at `/home/deck/scripts/playtime_queue.json`. This file is created automatically on the first run — you do not need to create it manually.
+
+The queue tracks every game session with the following data:
+
+```json
+{
+  "active_sessions": [
+    {
+      "session_id": "1715071200",
+      "appid": "2344520",
+      "name": "Diablo® IV",
+      "game_state": "opened",
+      "start_playtime": 359,
+      "end_playtime": null,
+      "start_time": 1715071200,
+      "end_time": null
+    }
+  ]
+}
+```
+
+- `start_playtime` and `end_playtime` are the total playtime in **minutes** read from Steam's local `localconfig.vdf` at the moment the session starts and ends. This means `(end_playtime - start_playtime) * 60` gives the exact session duration in seconds, and `end_playtime * 60` is the accurate total to write to the library.
+- Sessions with `game_state: closed` are published to Home Assistant via MQTT and removed from the local queue only after Home Assistant has confirmed processing with an ACK.
+- If the Deck goes to standby mid-game, the session stays `opened` in the queue. Home Assistant detects the sensor going offline and handles that session using the existing calculation method.
 
 ## 🏠 Step 2: Home Assistant Setup
 
@@ -98,7 +130,7 @@ Go to **Settings > Devices & Services > Helpers** and create these entities:
 * **Input Text**: `input_text.igdb_bearer_token` — managed automatically, stores the current Bearer token
 * **Input Text**: `input_text.igdb_token_expiry` — managed automatically, stores the token expiry timestamp
 
-> ℹ️ The `igdb_bearer_token` and `igdb_token_expiry` helpers are automatically updated by the cover art automation whenever the token is close to expiring. You only need to set them manually on first setup (see Step 3.3).
+> ℹ️ The `igdb_bearer_token` and `igdb_token_expiry` helpers are automatically updated by the cover art automation whenever the token is close to expiring. You only need to set them manually on first setup (see Step 3.3 below).
 
 **Steam Native playtime sync & cover art:**
 * **Input Text**: `input_text.steam_api_key` — your Steam Web API key (see Step 4.1)
@@ -117,6 +149,12 @@ Let's first do the MQTT sensors inside [`mqtt.yaml`](./home_assistant/sensors/mq
 
 Next up are the shell commands. Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml) into your `configuration.yaml` or separate shell commands yaml file.
 
+This includes the new queue bridge command:
+
+```yaml
+process_steam_queue: "curl -X POST -H \"Content-Type: application/json\" -d '{{ payload }}' http://127.0.0.1:8098/process_deck_queue"
+```
+
 Now let's do the same for the REST Sensor [REST Sensor](./home_assistant/sensors/sensors.yaml). Copy that code into your `sensors.yaml` file.
 
 And for the last sensors, you will need to copy the [`templates.yaml`](./home_assistant/sensors/templates.yaml) file content to your `templates.yaml` file on Home Assistant.
@@ -133,27 +171,56 @@ Create a file there named `steam_library.json` and copy in the template data fro
 
 The queue processor is a persistent Python service that runs in the background on your Home Assistant server. It receives game open and close events from HA automations via a local HTTP server, manages a queue file for crash recovery, and handles all playtime calculations and Steam API calls.
 
-> ℹ️ **Why a queue processor?** When you switch games rapidly on the Steam Deck, the script on the Deck runs every 90 seconds which means it can miss the `No game opened` state between two games. The queue processor detects these swaps, serializes all events and processes them one by one in order, preventing data corruption and ensuring every session is recorded correctly.
+> ℹ️ **Why a queue processor?** When you switch games rapidly on the Steam Deck, the script on the Deck runs every 20 seconds which means it can miss the `No game opened` state between two games. The queue processor detects these swaps, serializes all events and processes them one by one in order, preventing data corruption and ensuring every session is recorded correctly.
 
 #### 2.5.1 Create the Scripts Folder
 
 Use File Editor or SSH to create the folder `/config/scripts/` if it does not already exist.
 
-#### 2.5.2 Add the Queue Processor Script
+#### 2.5.2 Install Dependencies
+
+The queue processor requires the `paho-mqtt` library to publish ACK messages back to the Steam Deck. Install it via the Home Assistant terminal add-on:
+
+```bash
+pip install paho-mqtt
+```
+
+> ℹ️ If the Terminal & SSH add-on is not installed yet, go to **Settings → Add-ons → Add-on Store** and search for **Terminal & SSH**.
+
+#### 2.5.3 Add the Queue Processor Script
 
 Copy [`steam_queue_processor.py`](./home_assistant/scripts/steam_queue_processor.py) into `/config/scripts/steam_queue_processor.py`.
 
-#### 2.5.3 Add the Config File
+#### 2.5.4 Add the Config File
 
-Copy [`steam_queue_config.json`](./home_assistant/scripts/steam_queue_config_without_InfluxDB.json) into `/config/scripts/steam_queue_config.json` and fill in your values for ha_token and ha_url.
+Copy [`steam_queue_config.json`](./home_assistant/scripts/steam_queue_config_without_InfluxDB.json) into `/config/scripts/steam_queue_config.json` and fill in your values.
 
-If you want to use the setup with InfluxDB and Grafana, you will need to copy [`steam_queue_config.json`](./home_assistant/scripts/steam_queue_config_with_InfluxDB.json) into `/config/scripts/steam_queue_config.json` instead and fill in ha_roken, ha_url, influxdb_db (if you created it with another name), influxdb_user and influxdb_password.
+If you want to use the setup with InfluxDB and Grafana, use [`steam_queue_config_with_InfluxDB.json`](./home_assistant/scripts/steam_queue_config_with_InfluxDB.json) instead.
+
+The config file requires the following fields:
+
+```json
+{
+  "ha_url": "http://127.0.0.1:8123",
+  "ha_token": "your_long_lived_access_token",
+  "queue_file": "/config/scripts/steam_queue.json",
+  "library_file": "/config/www/steam_library.json",
+  "port": 8098,
+  "steam_api_delay": 180,
+  "mqtt_host": "your-mqtt-host",
+  "mqtt_port": 8883,
+  "mqtt_user": "your_mqtt_user",
+  "mqtt_pass": "your_mqtt_password"
+}
+```
+
+> ℹ️ The `mqtt_host`, `mqtt_port`, `mqtt_user` and `mqtt_pass` fields are new and required for the queue processor to publish ACK messages back to the Steam Deck after processing each session. Use the same credentials as in the Steam Deck script.
 
 To generate a long-lived access token go to your HA **Profile → Security → Long-lived access tokens** and click **Create Token**.
 
 > ℹ️ The service listens on `http://127.0.0.1:8098` by default — only accessible locally, not externally. If port 8098 is already in use on your system you can change it to any free port here and in `shell_commands.yaml`.
 
-#### 2.5.4 Add the Core Automations
+#### 2.5.5 Add the Core Automations
 
 **Game opened automation** — triggers when a game starts on the Steam Deck. Waits 2 seconds for MQTT sensors to settle, then posts the game details to the queue processor service and updates the session helpers.
 
@@ -163,6 +230,10 @@ Create a new automation, switch to YAML mode and paste in the [`steam_deck_game_
 
 Create a second new automation, switch to YAML mode and paste in the [`steam_deck_game_closed.yaml`](./home_assistant/automations/steam_deck_game_closed.yaml) code.
 
+**Queue bridge automation** — triggers whenever the Steam Deck publishes its local session queue to `steamdeck/playtime/queue` via MQTT and forwards the payload to the queue processor's `/process_deck_queue` endpoint. This is how closed sessions recorded on the Deck (including those recorded while offline) reach Home Assistant for processing.
+
+Create a new automation, switch to YAML mode and paste in the [`steam_deck_queue_bridge.yaml`](./home_assistant/automations/steam_deck_queue_bridge.yaml) code.
+
 **Queue processor startup and watchdog automations** — the startup automation launches the queue processor service when HA starts. The watchdog automation checks every 5 minutes if the service is still running and restarts it automatically if it has crashed, sending a persistent notification.
 
 Create two more automations by pasting the [`steam_queue_processor_automations.yaml`](./home_assistant/automations/steam_queue_processor_automations.yaml) code — this file contains both automations, so paste each one separately in YAML mode.
@@ -170,6 +241,22 @@ Create two more automations by pasting the [`steam_queue_processor_automations.y
 After adding all automations and shell commands do a **full Home Assistant restart**. The startup automation will launch the queue processor automatically.
 
 > ℹ️ You can verify the queue processor is running and inspect the current queue at any time by visiting `http://your-ha-ip:8098/status` or by checking the log at `/config/scripts/steam_queue_processor.log`.
+
+#### 2.5.6 How the Deck Queue and ACK Flow Works
+
+The Steam Deck maintains its own local session queue alongside the existing HA-based flow. Here is the full cycle:
+
+1. A game opens → the Deck adds an `opened` session to `playtime_queue.json` with the current total playtime from `localconfig.vdf` as `start_playtime`
+2. The game closes → the session is updated to `closed` with `end_playtime` read from `localconfig.vdf`
+3. On the next MQTT cycle the Deck publishes the full queue to `steamdeck/playtime/queue`
+4. The HA queue bridge automation forwards this to the queue processor's `/process_deck_queue` endpoint
+5. The queue processor processes each `closed` session — updating `steam_library.json` and InfluxDB using `end_playtime * 60` as the accurate total
+6. After successful processing the queue processor publishes a retained MQTT ACK to `steamdeck/playtime/ack/<session_id>`
+7. On the next cycle the Deck script reads the ACK, removes that session from its local queue, clears the retained ACK topic from MQTT, and publishes the updated queue
+
+If the Deck is offline when a session closes, the session stays in the local queue. As soon as connectivity is restored the queue is published and HA processes it. If the Deck goes to standby with a game still open (session state remains `opened`), the existing automation detects the sensor going offline and handles that session using the standard calculation method.
+
+> ℹ️ The queue processor uses an in-memory set to track sessions currently being processed. If the same `session_id` arrives again while processing is still in progress it is silently skipped, preventing double-counting. On processor restart the in-memory set is cleared but the Deck will resend any unACK'd sessions on its next cycle.
 
 ## 🎨 Step 3: IGDB Game Cover Art Setup
 
@@ -204,6 +291,7 @@ Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml)
 - `post_game_stop` — posts a game stop event to the queue processor service
 - `start_queue_processor` — starts the queue processor service in the background
 - `check_queue_processor` — checks if the queue processor service is running, used by the watchdog automation
+- `process_steam_queue` — forwards the Deck's MQTT session queue payload to the queue processor's `/process_deck_queue` endpoint
 
 All commands receive their parameters as variables from the automation at runtime, so no credentials are hardcoded in the config files.
 
@@ -347,7 +435,7 @@ curl -s -X POST "http://localhost:8086/query?u=YOUR_USER&p=YOUR_PASSWORD" \
 
 ### 6.3 Update the Queue Processor Config
 
-As mentioned in 2.5.3, use the config file with the InfluxDB settings included and fill in the needed values for the variables.
+As mentioned in 2.5.4, use the config file with the InfluxDB settings included and fill in the needed values for the variables.
 
 Restart the queue processor after saving — either via the watchdog automation or by triggering the startup automation from Developer Tools.
 
@@ -383,14 +471,16 @@ After each gaming session the queue processor writes a data point to the `playti
 
 In Grafana go to **Dashboards → New → New Dashboard** and create your own panels. Here are some examples of what I made:
 
-
 [`**Panel 1 — Top 10 Total Playtime:**`](./home_assistant/Grafana/panel_1.json)
 
-[`**Panel 2 — Time Played Past 7 Days:**`](./home_assistant/Grafana/panel_2.json)
+[`**Panel 2 — Time Played (Current Week):**`](./home_assistant/Grafana/panel_2.json)
 
-[`**Panel 3 — Playtime Increase Past 7 Days:**`](./home_assistant/Grafana/panel_3.json)
+[`**Panel 3 — Playtime Increase This Week:**`](./home_assistant/Grafana/panel_3.json)
 
-[`**Panel 4 — Top 10 games past 7 days:**`](./home_assistant/Grafana/panel_4.json)
+[`**Panel 4 — Most played games the past 7 days:**`](./home_assistant/Grafana/panel_4.json)
 
-[`**Panel 5 — Top 10 Games All Time:**`](./home_assistant/Grafana/panel_5.json)
+[`**Panel 5 — Top 10 games past 7 days:**`](./home_assistant/Grafana/panel_5.json)
 
+[`**Panel 6 — Top 10 games All Time:**`](./home_assistant/Grafana/panel_6.json)
+
+[`**Panel 7 — 10 Last Games Played:**`](./home_assistant/Grafana/panel_7.json)
