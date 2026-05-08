@@ -24,7 +24,7 @@ The system features a Smart Lookup engine that cleans up folder names and fetche
 **📡 Secure MQTT:** Supports TLS/SSL connections for remote tracking.  
 **🎨 Game Cover Art:** Automatically fetches game cover art from IGDB and displays it on your dashboard.  
 **🔄 Auto Token Refresh:** IGDB Bearer token is automatically refreshed before it expires.  
-**🕹️ Steam Native Playtime Sync:** Official Steam playtime is fetched from the Steam API after each session and used to keep your library accurate.  
+**🕹️ localconfig.vdf Playtime Sync:** Playtime for both Steam Native and Non-Steam games is read directly from Steam's local `localconfig.vdf` file — no API calls, no waiting, works offline and matches exactly what Steam displays in Game Mode.  
 **⚡ Queue-Based Processing:** A persistent Python service handles all playtime calculations in order, preventing data corruption when switching games rapidly.  
 **📋 Local Session Queue:** The Steam Deck maintains a local `playtime_queue.json` file that tracks open and closed game sessions with localconfig.vdf playtime snapshots, enabling accurate tracking even during offline play.  
 **🔁 Offline-Resilient Session Sync:** Closed sessions are queued locally on the Deck and synced to Home Assistant via MQTT as soon as a connection is available. Home Assistant processes each session and sends an ACK back to the Deck to confirm it was written to the library and InfluxDB.  
@@ -37,7 +37,7 @@ By using a Python script on the Steam Deck and a persistent queue processor serv
 ## 🛠 Prerequisites
 * MQTT Broker: A running broker (like Mosquitto) integrated with Home Assistant.  
 * Steam Deck: Access to Desktop Mode and a terminal (Konsole).  
-* Home Assistant Helpers: Several helpers (Boolean, Datetime, Text) to manage the session state, IGDB tokens, cover art and Steam playtime sync.
+* Home Assistant Helpers: Several helpers (Boolean, Datetime, Text) to manage the session state, IGDB tokens and cover art.
 
 ## 🎮 [Step 1: Steam Deck Setup](./steam_deck/)
 
@@ -130,11 +130,9 @@ Go to **Settings > Devices & Services > Helpers** and create these entities:
 * **Input Text**: `input_text.igdb_bearer_token` — managed automatically, stores the current Bearer token
 * **Input Text**: `input_text.igdb_token_expiry` — managed automatically, stores the token expiry timestamp
 
-> ℹ️ The `igdb_bearer_token` and `igdb_token_expiry` helpers are automatically updated by the cover art automation whenever the token is close to expiring. You only need to set them manually on first setup (see Step 3.3 below).
+> ℹ️ The `igdb_bearer_token` and `igdb_token_expiry` helpers are automatically updated by the cover art automation whenever the token is close to expiring. You only need to set them manually on first setup (see Step 3.3).
 
-**Steam Native playtime sync & cover art:**
-* **Input Text**: `input_text.steam_api_key` — your Steam Web API key (see Step 4.1)
-* **Input Text**: `input_text.steam_user_id` — your 64-bit Steam ID (see Step 4.1)
+**Cover art:**
 * **Input Text**: `input_text.steam_pending_appid` — managed automatically, holds the appid between game start and close
 * **Input Text**: `input_text.steam_pending_game_type` — managed automatically, holds the game type between game start and close
 * **Input Text**: `input_text.steam_pending_image_type` — managed automatically, holds `capsule` or `header` depending on which Steam CDN image is available for the current game
@@ -169,7 +167,7 @@ Create a file there named `steam_library.json` and copy in the template data fro
 
 ### 2.5 The Queue Processor Service
 
-The queue processor is a persistent Python service that runs in the background on your Home Assistant server. It receives game open and close events from HA automations via a local HTTP server, manages a queue file for crash recovery, and handles all playtime calculations and Steam API calls.
+The queue processor is a persistent Python service that runs in the background on your Home Assistant server. It receives game open and close events from HA automations via a local HTTP server, manages a queue file for crash recovery, and handles all playtime calculations.
 
 > ℹ️ **Why a queue processor?** When you switch games rapidly on the Steam Deck, the script on the Deck runs every 20 seconds which means it can miss the `No game opened` state between two games. The queue processor detects these swaps, serializes all events and processes them one by one in order, preventing data corruption and ensuring every session is recorded correctly.
 
@@ -206,7 +204,6 @@ The config file requires the following fields:
   "queue_file": "/config/scripts/steam_queue.json",
   "library_file": "/config/www/steam_library.json",
   "port": 8098,
-  "steam_api_delay": 180,
   "mqtt_host": "your-mqtt-host",
   "mqtt_port": 8883,
   "mqtt_user": "your_mqtt_user",
@@ -214,7 +211,7 @@ The config file requires the following fields:
 }
 ```
 
-> ℹ️ The `mqtt_host`, `mqtt_port`, `mqtt_user` and `mqtt_pass` fields are new and required for the queue processor to publish ACK messages back to the Steam Deck after processing each session. Use the same credentials as in the Steam Deck script.
+> ℹ️ The `mqtt_host`, `mqtt_port`, `mqtt_user` and `mqtt_pass` fields are required for the queue processor to publish ACK messages back to the Steam Deck after processing each session. Use the same credentials as in the Steam Deck script.
 
 To generate a long-lived access token go to your HA **Profile → Security → Long-lived access tokens** and click **Create Token**.
 
@@ -226,7 +223,7 @@ To generate a long-lived access token go to your HA **Profile → Security → L
 
 Create a new automation, switch to YAML mode and paste in the [`steam_deck_game_opened.yaml`](./home_assistant/automations/steam_deck_game_opened.yaml) code.
 
-**Game closed automation** — triggers when a game stops. Posts the stop event to the queue processor service with a `properly_closed` flag. This flag is `false` when the sensor reports `offline`, `unavailable` or `unknown` — indicating the Deck went to standby or the script crashed — and `true` for all normal closes. Game swaps (switching directly from one game to another) are detected by the queue processor itself and always treated as properly closed for Steam Native games.
+**Game closed automation** — triggers when a game stops. When the sensor reports `offline`, `unavailable` or `unknown` — indicating the Deck went to standby or lost connection — it posts the stop event to the queue processor with `properly_closed=false` so the session duration is calculated and added to the existing total. For all normal closes the queue processor receives no stop event and instead relies on the deck queue (via the queue bridge automation) which uses `localconfig.vdf` as the source of truth.
 
 Create a second new automation, switch to YAML mode and paste in the [`steam_deck_game_closed.yaml`](./home_assistant/automations/steam_deck_game_closed.yaml) code.
 
@@ -350,36 +347,11 @@ The cover URL template sensor and image entity are already included in:
 
 You can copy them from the templates.yaml file into your own Home Assistant configuration.
 
-## 🕹️ Step 4: Steam Native Playtime Sync Setup
-
-For Steam Native games, the system fetches the official total playtime directly from Steam after each session and uses that to keep your library accurate. This means your playtime in Home Assistant will always match what Steam reports, including any time played on other devices.
-
-> ℹ️ **How it works:** When a Steam Native game is properly closed the queue processor waits 3 minutes to give Steam time to update its servers, then calls the Steam API, finds the game by appid, and overwrites the session-tracked playtime with the official Steam total. This applies to both normal closes and game swaps — if you switch directly from one Steam Native game to another the swap is detected and each game gets its own 3 minute Steam API wait. If the Deck goes to standby with a game open, the session time is calculated from the start and stop timestamps and added to the existing playtime instead.
-
-### 4.1 Get Your Steam API Key and Steam ID
-
-**Steam API Key:**
-1. Go to [https://steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) and log in with your Steam account.
-2. Enter any domain name in the field (e.g. `localhost`) — it does not matter for personal use.
-3. Click **Register** and copy the API key shown on the page.
-4. Paste it into the `input_text.steam_api_key` helper you created in Step 2.
-
-**Steam ID (64-bit):**
-1. Go to [https://steamid.io](https://steamid.io) and enter your Steam profile URL or username.
-2. Copy the **steamID64** value — a 17-digit number like `76561198012345678`.
-3. Paste it into the `input_text.steam_user_id` helper you created in Step 2.
-
-> ⚠️ Make sure your Steam profile's **Game details** privacy setting is set to **Public**, otherwise the API will return no data.
-
-### 4.2 Shell Commands
-
-The Steam API calls are handled entirely by the queue processor service — no additional shell commands are needed beyond what was added in Step 3.2. The queue processor reads the Steam API key and Steam user ID directly from the HA helpers via the REST API using the token you configured in the queue processor config file.
-
-## 📊 Step 5: Visualizing the Data
+## 📊 Step 4: Visualizing the Data
 
 The dashboard card uses a custom Steam Deck icon set for the dock status. You need to install this before adding the card.
 
-### 5.1 Install the Custom Icon Set
+### 4.1 Install the Custom Icon Set
 
 1. Copy [`hass-fgod-icons.js`](./home_assistant/www/hass-fgod-icons.js) into your `/config/www/` folder.
 2. Add the [`configuration.yaml`](./home_assistant/configuration.yaml) code to your configuration.yaml file.
@@ -387,7 +359,7 @@ The dashboard card uses a custom Steam Deck icon set for the dock status. You ne
 
 > ℹ️ Without the icon set the dock status icons will not display correctly on the dashboard card.
 
-### 5.2 Add the Dashboard Cards
+### 4.2 Add the Dashboard Cards
 
 The first card uses [`steamdeck.png`](./home_assistant/www/steamdeck.png) as the background image. Copy this file into your `/config/www/` folder alongside `steam_library.json`.
 
@@ -397,13 +369,13 @@ The second card is a Markdown card which displays the top 5 most played games wi
 
 Create a new card on your dashboard and copy the [`markdown_card.yaml`](./home_assistant/dashboard/markdown_card.yaml) code into the card yaml.
 
-## 📈 Step 6: InfluxDB & Grafana (Optional)
+## 📈 Step 5: InfluxDB & Grafana (Optional)
 
 This step is fully optional. If you skip it the rest of the system works exactly as described above. InfluxDB enables long-term time-series storage of your playtime data, and Grafana provides rich dashboards for visualizing it — top games, weekly playtime, session counts and more.
 
 > ℹ️ The queue processor will silently skip InfluxDB writes if the InfluxDB settings are not present in `steam_queue_config.json`. No errors, no impact on normal operation.
 
-### 6.1 Install the Apps
+### 5.1 Install the Apps
 
 Both add-ons are available directly from the Home Assistant add-on store.
 
@@ -412,7 +384,7 @@ Both add-ons are available directly from the Home Assistant add-on store.
 3. Search for and install **Grafana**
 4. Start both add-ons and enable **Start on boot** and **Watchdog** for each
 
-### 6.2 Set Up InfluxDB
+### 5.2 Set Up InfluxDB
 
 1. On the InfluxDB apps page click **Open Web UI**
 2. Click the **InfluxDB Admin** icon (crown) in the left menu
@@ -433,13 +405,13 @@ curl -s -X POST "http://localhost:8086/query?u=YOUR_USER&p=YOUR_PASSWORD" \
   --data-urlencode "q=SHOW DATABASES"
 ```
 
-### 6.3 Update the Queue Processor Config
+### 5.3 Update the Queue Processor Config
 
 As mentioned in 2.5.4, use the config file with the InfluxDB settings included and fill in the needed values for the variables.
 
 Restart the queue processor after saving — either via the watchdog automation or by triggering the startup automation from Developer Tools.
 
-### 6.4 What Gets Stored in InfluxDB
+### 5.4 What Gets Stored in InfluxDB
 
 After each gaming session the queue processor writes a data point to the `playtime` measurement with the following data:
 
@@ -457,7 +429,7 @@ After each gaming session the queue processor writes a data point to the `playti
 
 **Timestamp** — set to the start time of the session.
 
-### 6.5 Set Up Grafana
+### 5.5 Set Up Grafana
 
 1. On the Grafana add-on page click **Open Web UI**
 2. Log in with the default credentials (`admin` / `admin`) and set a new password
@@ -467,7 +439,7 @@ After each gaming session the queue processor writes a data point to the `playti
 6. Set the database to `steamdeck`, add your InfluxDB username and password and HTTP Method to GET
 7. Click **Save & Test** — it should confirm the connection is working
 
-### 6.6 Create the Dashboard
+### 5.6 Create the Dashboard
 
 In Grafana go to **Dashboards → New → New Dashboard** and create your own panels. Here are some examples of what I made:
 

@@ -2,19 +2,26 @@
 """
 Steam Deck Queue Processor
 A persistent background service that handles game session tracking,
-playtime calculation, Steam API sync and InfluxDB recording for the
-Steam Deck HA integration.
+playtime calculation and InfluxDB recording for the Steam Deck HA integration.
 
 Runs as a background process on Home Assistant OS, started by a HA automation
 on homeassistant_start and monitored by a watchdog automation every 5 minutes.
 
-New in this version:
-  - /process_deck_queue endpoint receives the playtime queue from the Steam Deck
-    via MQTT → HA automation → HTTP POST
-  - Processes closed sessions using localconfig.vdf playtime as source of truth
-    (end_playtime * 60 = total seconds, (end_playtime - start_playtime) * 60 = session seconds)
-  - Publishes MQTT ACK per session_id after successful processing
-  - Tracks in-flight session_ids to prevent double processing
+Playtime flow:
+  - Properly closed sessions (any game type) are handled exclusively via the
+    Deck's local playtime queue, received over MQTT → /process_deck_queue.
+    localconfig.vdf is the source of truth:
+      total_seconds   = end_playtime * 60
+      session_seconds = (end_playtime - start_playtime) * 60
+    An MQTT ACK is published per session_id after successful processing so the
+    Deck can clean up its local queue.
+
+  - Improperly closed sessions (game → standby/offline) are handled by the
+    existing /game_stop flow from the HA automation. These have no localconfig
+    data so playtime is calculated as: existing_seconds + session_duration.
+
+  - The Steam API is no longer used for playtime — localconfig.vdf is faster,
+    works offline, and is equally accurate for games played on the Deck.
 """
 
 import json
@@ -23,7 +30,6 @@ import os
 import queue
 import ssl
 import threading
-import time
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -125,12 +131,6 @@ def ha_get(path):
 def get_ha_state(entity_id):
     result = ha_get(f'states/{entity_id}')
     return result.get('state', '')
-
-def get_steam_api_key():
-    return get_ha_state('input_text.steam_api_key')
-
-def get_steam_user_id():
-    return get_ha_state('input_text.steam_user_id')
 
 # ── Library file helpers ───────────────────────────────────────────────────────
 library_file_lock = threading.Lock()
@@ -253,33 +253,6 @@ def write_to_influxdb(game_name, appid, game_type, total_seconds, session_second
     except Exception as e:
         log.error(f'InfluxDB write failed for {game_name}: {e}')
 
-# ── Steam API helpers ──────────────────────────────────────────────────────────
-def fetch_steam_playtime(appid):
-    api_key  = get_steam_api_key()
-    steam_id = get_steam_user_id()
-
-    if not api_key or not steam_id:
-        log.error('Steam API key or user ID not set in HA helpers')
-        return None
-
-    url = (
-        f'https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/'
-        f'?key={api_key}&steamid={steam_id}&include_appinfo=1'
-        f'&include_played_free_games=1&format=json'
-    )
-    try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data   = json.loads(resp.read())
-            games  = data.get('response', {}).get('games', [])
-            for game in games:
-                if game.get('appid') == int(appid):
-                    minutes = game.get('playtime_forever', 0)
-                    return minutes * 60
-    except Exception as e:
-        log.error(f'Error fetching Steam playtime: {e}')
-    return None
-
 # ── MQTT ACK publisher ─────────────────────────────────────────────────────────
 def publish_ack(session_id):
     """
@@ -313,7 +286,16 @@ def publish_ack(session_id):
 
 # ── Processing logic ───────────────────────────────────────────────────────────
 def process_stop_entry(entry):
-    """Process a stop entry from the existing HA automation flow."""
+    """
+    Process an improperly closed session from the HA automation flow.
+
+    This is ONLY called when properly_closed=False — meaning the game sensor
+    went to offline/standby without a clean close. In this case localconfig.vdf
+    was never updated so we fall back to: existing_seconds + session_duration.
+
+    Properly closed sessions are handled exclusively by process_deck_session()
+    via the /process_deck_queue endpoint, using localconfig.vdf as source of truth.
+    """
     game_name       = entry['game_name']
     appid           = entry.get('appid', '')
     game_type       = entry.get('game_type', '')
@@ -324,45 +306,31 @@ def process_stop_entry(entry):
 
     log.info(f'Processing stop: {game_name} | type={game_type} | properly_closed={properly_closed}')
 
-    session_seconds = (stop_time - start_time).total_seconds()
-
-    if game_type == 'Steam Native' and properly_closed:
-        delay = config.get('steam_api_delay', 180)
-        log.info(f'Waiting {delay}s for Steam API to update for {game_name}...')
-        time.sleep(delay)
-
-        steam_seconds = fetch_steam_playtime(appid)
-        if steam_seconds is not None:
-            updated = update_library_entry(
-                game_name, steam_seconds,
-                start_time=start_time.isoformat(),
-                stop_time=stop_time.isoformat()
-            )
-            log.info(f'Steam API playtime for {game_name}: {steam_seconds}s')
-        else:
-            log.warning(f'Steam API fetch failed for {game_name}, falling back to session calculation')
-            existing_seconds = get_existing_seconds(game_name)
-            new_seconds      = existing_seconds + session_seconds
-            updated = update_library_entry(
-                game_name, new_seconds,
-                start_time=start_time.isoformat(),
-                stop_time=stop_time.isoformat()
-            )
-    else:
-        existing_seconds = get_existing_seconds(game_name)
-        new_seconds      = existing_seconds + session_seconds
-        updated = update_library_entry(
-            game_name, new_seconds,
-            start_time=start_time.isoformat(),
-            stop_time=stop_time.isoformat()
+    # Properly closed sessions should come via the deck queue, not here.
+    # If one slips through (e.g. deck queue not yet set up), log a warning
+    # and fall back to session calculation rather than silently doing nothing.
+    if properly_closed:
+        log.warning(
+            f'{game_name} arrived at process_stop_entry with properly_closed=True — '
+            f'expected via deck queue. Falling back to session calculation.'
         )
-        log.info(f'Session playtime for {game_name}: {session_seconds}s added to {existing_seconds}s existing')
+
+    session_seconds  = (stop_time - start_time).total_seconds()
+    existing_seconds = get_existing_seconds(game_name)
+    new_seconds      = existing_seconds + session_seconds
+
+    updated = update_library_entry(
+        game_name, new_seconds,
+        start_time=start_time.isoformat(),
+        stop_time=stop_time.isoformat()
+    )
+    log.info(f'Improperly closed: {game_name} — {session_seconds}s added to {existing_seconds}s existing')
 
     write_to_influxdb(
         game_name=game_name,
         appid=appid,
         game_type=game_type,
-        total_seconds=updated['seconds'],
+        total_seconds=new_seconds,
         session_seconds=session_seconds,
         session_count=updated['session_count'],
         first_played=updated['first_played'],
@@ -443,13 +411,20 @@ def process_queue_entry(entry):
 memory_queue = queue.Queue()
 
 def worker():
+    """Single worker thread — processes one queue entry at a time in order."""
     log.info('Worker thread started')
     while True:
         entry = memory_queue.get()
         try:
-            process_queue_entry(entry)
+            if entry.get('_type') == 'deck_session':
+                process_deck_session(entry['session'])
+            else:
+                process_queue_entry(entry)
         except Exception as e:
-            log.error(f'Error processing entry {entry.get("entry_id")}: {e}')
+            session_id = entry.get('session', {}).get('session_id') or entry.get('entry_id')
+            log.error(f'Error processing entry {session_id}: {e}')
+            if entry.get('_type') == 'deck_session':
+                unmark_in_flight(entry['session'].get('session_id', ''))
         finally:
             memory_queue.task_done()
 
@@ -563,29 +538,14 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         entry_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{data['appid']}"
 
-        with queue_file_lock:
-            entries = read_queue_file()
-            for existing in entries:
-                if existing.get('state') == 'start' and existing.get('stop_time') is None:
-                    log.info(f'Game swap detected — synthesizing stop for {existing["game_name"]}')
-                    stop_entry = dict(existing)
-                    stop_entry['state'] = 'stop'
-                    stop_entry['stop_time'] = data['start_time']
-                    stop_entry['properly_closed'] = existing.get('game_type') == 'Steam Native'
-                    entries = [e for e in entries if e.get('entry_id') != existing['entry_id']]
-                    entries.append(stop_entry)
-                    write_queue_file(entries)
-                    memory_queue.put(stop_entry)
-                    break
-
         entry = {
-            'entry_id':       entry_id,
-            'game_name':      data['game_name'],
-            'appid':          data['appid'],
-            'game_type':      data['game_type'],
-            'state':          'start',
-            'start_time':     data['start_time'],
-            'stop_time':      None,
+            'entry_id':        entry_id,
+            'game_name':       data['game_name'],
+            'appid':           data['appid'],
+            'game_type':       data['game_type'],
+            'state':           'start',
+            'start_time':      data['start_time'],
+            'stop_time':       None,
             'properly_closed': None
         }
 

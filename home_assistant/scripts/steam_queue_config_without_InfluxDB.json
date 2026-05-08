@@ -7,6 +7,5 @@
     "mqtt_pass": "mqtt-password",
     "queue_file": "/config/steam_queue.json",
     "library_file": "/config/www/steam_library.json",
-    "port": 8098,
-    "steam_api_delay": 180
+    "port": 8098
 }
