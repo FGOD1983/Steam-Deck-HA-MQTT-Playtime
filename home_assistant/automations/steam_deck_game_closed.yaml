@@ -1,7 +1,9 @@
 alias: Steam Deck - Game Closed
 description: >
   Posts game stop event to the queue processor service and clears session
-  helpers and cover art.
+  helpers and cover art. For improperly closed sessions (standby/offline), reads
+  the session start_time from the MQTT playtime queue sensor to calculate
+  accurate session duration excluding standby periods.
 triggers:
   - entity_id: sensor.steam_deck_active_game_display
     trigger: state
@@ -26,6 +28,27 @@ actions:
       properly_closed: >
         {{ trigger.to_state.state | lower | trim not in ['offline',
         'unavailable', 'unknown'] }}
+      queue_sessions: >
+        {{ state_attr('sensor.steam_deck_playtime_queue', 'active_sessions') or
+        [] }}
+      open_session: >
+        {% set sessions = state_attr('sensor.steam_deck_playtime_queue',
+        'active_sessions') or [] %} {% set match = sessions |
+        selectattr('game_state', 'eq', 'opened')
+                                | selectattr('name', 'eq', saved_game_name)
+                                | list %}
+        {{ match[0] if match | length > 0 else {} }}
+      session_start_time: >
+        {% set sessions = state_attr('sensor.steam_deck_playtime_queue',
+        'active_sessions') or [] %} {% set match = sessions |
+        selectattr('game_state', 'eq', 'opened')
+                                | selectattr('name', 'eq', saved_game_name)
+                                | list %}
+        {% if match | length > 0 %}
+          {{ match[0].start_time | int | timestamp_custom('%Y-%m-%dT%H:%M:%S') }}
+        {% else %}
+          {{ stop_time }}
+        {% endif %}
   - if:
       - condition: template
         value_template: "{{ not properly_closed }}"
@@ -34,6 +57,9 @@ actions:
         data:
           game_name: "{{ saved_game_name }}"
           stop_time: "{{ stop_time }}"
+          start_time: "{{ session_start_time }}"
+          game_type: "{{ states('input_text.steam_pending_game_type') }}"
+          appid: "{{ states('input_text.steam_pending_appid') }}"
           properly_closed: "{{ properly_closed | lower }}"
   - action: input_boolean.turn_off
     target:

@@ -29,7 +29,8 @@
   post_game_stop: >-
     curl -s -X POST http://127.0.0.1:8098/game_stop
     -H "Content-Type: application/json"
-    -d "{\"game_name\": \"{{ game_name }}\", \"stop_time\": \"{{ stop_time }}\", \"properly_closed\": {{ properly_closed | lower }}}"
+    -d "{\"game_name\":\"{{ game_name }}\",\"appid\":\"{{ appid }}\",\"stop_time\":\"{{ stop_time }}\",\"start_time\":\"{{ start_time }}\",\"game_type\":\"{{ game_type }}\",\"properly_closed\":{{ properly_closed | lower }}}"
+  
 
   # Start the queue processor service in the background
   start_queue_processor: "nohup python3 /config/scripts/steam_queue_processor.py > /config/scripts/steam_queue_processor.log 2>&1 &"
