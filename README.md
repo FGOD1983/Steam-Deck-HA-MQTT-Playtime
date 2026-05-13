@@ -29,6 +29,7 @@ The system features a Smart Lookup engine that cleans up folder names and fetche
 **📋 Local Session Queue:** The Steam Deck maintains a local `playtime_queue.json` file that tracks open and closed game sessions with localconfig.vdf playtime snapshots, enabling accurate tracking even during offline play.  
 **🔁 Offline-Resilient Session Sync:** Closed sessions are queued locally on the Deck and synced to Home Assistant via MQTT as soon as a connection is available. Home Assistant processes each session and sends an ACK back to the Deck to confirm it was written to the library and InfluxDB.  
 **📦 Non-Steam Playtime from localconfig.vdf:** Non-Steam game playtime is read directly from Steam's local `localconfig.vdf` file, giving accurate totals that match what Steam itself displays in Game Mode.  
+**💤 Standby Gap Detection:** The Deck script detects when the Deck was in standby by comparing the current run time against the previous run timestamp stored in `last_run.json`. If the gap exceeds 30 seconds, the open session is closed with the correct stop time and marked accordingly so Home Assistant knows whether it already recorded that session or not.  
 
 By using a Python script on the Steam Deck and a persistent queue processor service in Home Assistant, your playtime data remains accurate even if Home Assistant reboots during a gaming session or you switch games rapidly.
 
@@ -93,6 +94,7 @@ The queue tracks every game session with the following data:
       "appid": "2344520",
       "name": "Diablo® IV",
       "game_state": "opened",
+      "ha_processed": null,
       "start_playtime": 359,
       "end_playtime": null,
       "start_time": 1715071200,
@@ -103,8 +105,17 @@ The queue tracks every game session with the following data:
 ```
 
 - `start_playtime` and `end_playtime` are the total playtime in **minutes** read from Steam's local `localconfig.vdf` at the moment the session starts and ends. This means `(end_playtime - start_playtime) * 60` gives the exact session duration in seconds, and `end_playtime * 60` is the accurate total to write to the library.
+- `ha_processed` is `null` while a session is open. When a session is closed it is set to `true` if Home Assistant already recorded it (standby case where HA saw the sensor go offline) or `false` if Home Assistant has not yet processed it and needs to do so via the queue.
 - Sessions with `game_state: closed` are published to Home Assistant via MQTT and removed from the local queue only after Home Assistant has confirmed processing with an ACK.
-- If the Deck goes to standby mid-game, the session stays `opened` in the queue. Home Assistant detects the sensor going offline and handles that session using the existing calculation method.
+- If the Deck goes to standby mid-game the script detects the gap on the next run using `last_run.json` (see below) and closes the session with the correct stop time. If the Deck had internet on the last run before standby, `ha_processed` is set to `true` since Home Assistant already registered the session when the sensor went offline.
+
+### 1.5 Last Run Tracking
+
+The script maintains a second file at `/home/deck/scripts/last_run.json` that records the full state of every script run. This is created automatically and you do not need to create it manually.
+
+This file is used for standby gap detection — if the time between the current run and the last recorded run exceeds 30 seconds, the script knows the Deck was in standby and handles the open session accordingly.
+
+When the Deck has internet the file is overwritten with just the current run. When offline, runs are accumulated in the file until internet is restored, at which point the file is reset to just the latest online run. This gives the script a backlog to reason about during offline periods.
 
 ## 🏠 Step 2: Home Assistant Setup
 
@@ -143,14 +154,31 @@ Go to **Settings > Devices & Services > Helpers** and create these entities:
 
 Now we need to build the sensors and the needed shell commands for the data. These can be created in the `configuration.yaml` or in their own separate yaml file which should then be included in the `configuration.yaml`.
 
-Let's first do the MQTT sensors inside [`mqtt.yaml`](./home_assistant/sensors/mqtt.yaml). Copy the code inside your Home Assistant mqtt.yaml file.
+Let's first do the MQTT sensors inside [`mqtt.yaml`](./home_assistant/sensors/mqtt.yaml). Copy the code inside your Home Assistant mqtt.yaml file. This includes the playtime queue sensor that makes the full deck session queue available as a sensor attribute for automations:
+
+```yaml
+- name: "Steam Deck Playtime Queue"
+  unique_id: "steam_deck_playtime_queue"
+  state_topic: "steamdeck/playtime/queue"
+  icon: "mdi:gamepad-variant"
+  value_template: "{{ value_json.active_sessions | length }} session(s)"
+  json_attributes_topic: "steamdeck/playtime/queue"
+  json_attributes_template: "{{ value }}"
+```
 
 Next up are the shell commands. Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml) into your `configuration.yaml` or separate shell commands yaml file.
 
-This includes the new queue bridge command:
+The key commands for the queue system are:
 
 ```yaml
+# Forward the Deck's MQTT session queue to the queue processor
 process_steam_queue: "curl -X POST -H \"Content-Type: application/json\" -d '{{ payload }}' http://127.0.0.1:8098/process_deck_queue"
+
+# Post a game stop event for improperly closed sessions (standby/offline)
+post_game_stop: >-
+  curl -s -X POST http://127.0.0.1:8098/game_stop
+  -H "Content-Type: application/json"
+  -d "{\"game_name\":\"{{ game_name }}\",\"appid\":\"{{ appid }}\",\"stop_time\":\"{{ stop_time }}\",\"start_time\":\"{{ start_time }}\",\"game_type\":\"{{ game_type }}\",\"properly_closed\":{{ properly_closed | lower }}}"
 ```
 
 Now let's do the same for the REST Sensor [REST Sensor](./home_assistant/sensors/sensors.yaml). Copy that code into your `sensors.yaml` file.
@@ -219,11 +247,11 @@ To generate a long-lived access token go to your HA **Profile → Security → L
 
 #### 2.5.5 Add the Core Automations
 
-**Game opened automation** — triggers when a game starts on the Steam Deck. Waits 2 seconds for MQTT sensors to settle, then posts the game details to the queue processor service and updates the session helpers.
+**Game opened automation** — triggers when a game starts on the Steam Deck. Waits 2 seconds for MQTT sensors to settle, then updates the session helpers and cover art.
 
 Create a new automation, switch to YAML mode and paste in the [`steam_deck_game_opened.yaml`](./home_assistant/automations/steam_deck_game_opened.yaml) code.
 
-**Game closed automation** — triggers when a game stops. When the sensor reports `offline`, `unavailable` or `unknown` — indicating the Deck went to standby or lost connection — it posts the stop event to the queue processor with `properly_closed=false` so the session duration is calculated and added to the existing total. For all normal closes the queue processor receives no stop event and instead relies on the deck queue (via the queue bridge automation) which uses `localconfig.vdf` as the source of truth.
+**Game closed automation** — triggers when a game stops. When the sensor reports `offline`, `unavailable` or `unknown` — indicating the Deck went to standby or lost connection — it posts the stop event to the queue processor with `properly_closed=false`. The automation reads the session `start_time` from the `sensor.steam_deck_playtime_queue` MQTT sensor to calculate the accurate session duration, and sends `appid` and `game_type` from the session helpers so the processor can write a complete InfluxDB data point. For all normal closes the processor receives no stop event and instead relies on the deck queue (via the queue bridge automation) which uses `localconfig.vdf` as the source of truth.
 
 Create a second new automation, switch to YAML mode and paste in the [`steam_deck_game_closed.yaml`](./home_assistant/automations/steam_deck_game_closed.yaml) code.
 
@@ -241,17 +269,23 @@ After adding all automations and shell commands do a **full Home Assistant resta
 
 #### 2.5.6 How the Deck Queue and ACK Flow Works
 
-The Steam Deck maintains its own local session queue alongside the existing HA-based flow. Here is the full cycle:
+The Steam Deck maintains its own local session queue alongside the HA-based flow. Here is the full cycle for a normally closed session:
 
-1. A game opens → the Deck adds an `opened` session to `playtime_queue.json` with the current total playtime from `localconfig.vdf` as `start_playtime`
-2. The game closes → the session is updated to `closed` with `end_playtime` read from `localconfig.vdf`
+1. A game opens → the Deck adds an `opened` session to `playtime_queue.json` with `ha_processed: null`, the current total playtime from `localconfig.vdf` as `start_playtime`, and the current Unix timestamp as `start_time`
+2. The game closes → the session is updated to `closed` with `end_playtime` read from `localconfig.vdf` and `ha_processed: false`
 3. On the next MQTT cycle the Deck publishes the full queue to `steamdeck/playtime/queue`
 4. The HA queue bridge automation forwards this to the queue processor's `/process_deck_queue` endpoint
 5. The queue processor processes each `closed` session — updating `steam_library.json` and InfluxDB using `end_playtime * 60` as the accurate total
 6. After successful processing the queue processor publishes a retained MQTT ACK to `steamdeck/playtime/ack/<session_id>`
 7. On the next cycle the Deck script reads the ACK, removes that session from its local queue, clears the retained ACK topic from MQTT, and publishes the updated queue
 
-If the Deck is offline when a session closes, the session stays in the local queue. As soon as connectivity is restored the queue is published and HA processes it. If the Deck goes to standby with a game still open (session state remains `opened`), the existing automation detects the sensor going offline and handles that session using the standard calculation method.
+**Standby handling:**
+
+When the Deck goes to standby with a game open, the HA game closed automation fires after 90 seconds when the sensor goes to `offline`. It posts the stop event to the processor using the session `start_time` from the MQTT queue sensor, calculates the session duration, and adds it to the existing total. On the next run after waking from standby the Deck script detects the gap using `last_run.json`, closes the open session with `ha_processed: true` (since HA already recorded it) and an `end_time` equal to the last run timestamp. The processor receives this session, sees `ha_processed: true`, skips the write and just sends an ACK to clean up the deck queue.
+
+**Offline standby handling:**
+
+If the Deck was offline when it went to standby, `ha_processed` is set to `false`. The processor processes the session normally when it arrives, since HA had no knowledge of it.
 
 > ℹ️ The queue processor uses an in-memory set to track sessions currently being processed. If the same `session_id` arrives again while processing is still in progress it is silently skipped, preventing double-counting. On processor restart the in-memory set is cleared but the Deck will resend any unACK'd sessions on its next cycle.
 
@@ -284,8 +318,7 @@ Copy the code from [`shell_commands.yaml`](./home_assistant/shell_commands.yaml)
 - `check_steam_image` — checks whether a Steam CDN image URL exists, used to determine whether to use the capsule or header image for Steam Native games
 
 **Queue processor:**
-- `post_game_start` — posts a game start event to the queue processor service
-- `post_game_stop` — posts a game stop event to the queue processor service
+- `post_game_stop` — posts a game stop event to the queue processor for improperly closed sessions (standby/offline), including `start_time`, `stop_time`, `appid` and `game_type`
 - `start_queue_processor` — starts the queue processor service in the background
 - `check_queue_processor` — checks if the queue processor service is running, used by the watchdog automation
 - `process_steam_queue` — forwards the Deck's MQTT session queue payload to the queue processor's `/process_deck_queue` endpoint
@@ -418,16 +451,18 @@ After each gaming session the queue processor writes a data point to the `playti
 **Tags** (indexed, used for filtering):
 - `game` — game name
 - `game_type` — Steam Native, Non-Steam, ROM, ExoDOS
-- `appid` — Steam appid (empty for non-Steam games)
+- `appid` — Steam appid (omitted for sessions where appid is not available)
 
 **Fields** (the actual values):
 - `total_seconds` — total playtime in seconds after this session
 - `session_seconds` — duration of this session in seconds
 - `session_count` — running total of how many times this game has been played
-- `first_played` — timestamp of the first ever recorded session
-- `last_played` — timestamp of when this session ended
+- `first_played` — UTC timestamp string of the first ever recorded session
+- `last_played` — UTC timestamp string of when this session started
 
-**Timestamp** — set to the start time of the session.
+**Timestamp** — set to the start time of the session in UTC nanoseconds.
+
+> ℹ️ `first_played` and `last_played` are stored as UTC strings so Grafana displays them correctly in your local timezone without any offset issues.
 
 ### 5.5 Set Up Grafana
 

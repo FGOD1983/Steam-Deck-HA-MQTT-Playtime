@@ -29,6 +29,7 @@ actions:
       appid: "{{ current_appid }}"
       game_type: "{{ current_game_type }}"
       start_time: "{{ start_time }}"
+    enabled: false
   - action: input_datetime.set_datetime
     target:
       entity_id: input_datetime.steam_deck_sessie_starttijd

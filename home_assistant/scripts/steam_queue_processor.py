@@ -36,10 +36,11 @@ import os
 import queue
 import ssl
 import threading
+import time as time_module
 import urllib.request
 import urllib.error
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import paho.mqtt.client as mqtt_client
@@ -70,13 +71,6 @@ def load_config():
         exit(1)
 
 # ── In-flight session tracking (prevents double processing) ───────────────────
-# Holds session_ids currently being processed or already ACK'd this run.
-# This is in-memory only — on restart it starts fresh, which is fine since
-# the Deck queue will resend any unACK'd sessions and they will be reprocessed.
-#
-# Also tracks game names recently processed via game_stop to guard against
-# the rare case where a deck queue session arrives for a game that was just
-# handled by the improperly closed path.
 in_flight_lock = threading.Lock()
 in_flight_sessions = set()
 recently_stopped_games = {}  # game_name_lower → timestamp of game_stop processing
@@ -98,7 +92,6 @@ def mark_recently_stopped(game_name):
         recently_stopped_games[game_name.lower()] = datetime.now().timestamp()
 
 def was_recently_stopped(game_name, within_seconds=120):
-    """Check if this game was processed via game_stop within the last N seconds."""
     with in_flight_lock:
         ts = recently_stopped_games.get(game_name.lower())
         if ts is None:
@@ -275,7 +268,6 @@ def write_to_influxdb(game_name, appid, game_type, total_seconds, session_second
     ]
     if appid:
         tags.append(f'appid={escape_influx_tag(appid)}')
-    
     tag_str = ','.join(tags)
 
     # Convert string fields to UTC so Grafana displays correct local time
@@ -311,7 +303,7 @@ def write_to_influxdb(game_name, appid, game_type, total_seconds, session_second
         log.error(f'InfluxDB write failed for {game_name}: {e} | Body: {body}')
     except Exception as e:
         log.error(f'InfluxDB write failed for {game_name}: {e}')
-        
+
 # ── MQTT ACK publisher ─────────────────────────────────────────────────────────
 def publish_ack(session_id):
     """
@@ -360,8 +352,6 @@ def process_stop_entry(entry):
     properly_closed = entry.get('properly_closed', False)
     entry_id        = entry['entry_id']
 
-    # Use start_time from the automation payload (sourced from MQTT queue sensor)
-    # rather than the queue file entry's start_time which may be stale.
     start_time_str = entry.get('start_time')
     stop_time_str  = entry.get('stop_time')
 
@@ -440,8 +430,6 @@ def process_deck_session(session):
     start_time     = datetime.fromtimestamp(int(session['start_time']))
     end_time       = datetime.fromtimestamp(int(session['end_time']))
 
-    # ha_processed=True: HA already recorded this session via game_stop.
-    # Just send ACK to clean up the deck queue, no write needed.
     if ha_processed:
         log.info(
             f'Deck session already processed by HA, skipping write: '
@@ -451,8 +439,6 @@ def process_deck_session(session):
         unmark_in_flight(session_id)
         return
 
-    # Safety guard: if this game was recently processed via game_stop
-    # (within 2 minutes), skip to avoid double counting.
     if was_recently_stopped(game_name):
         log.warning(
             f'Deck session for {game_name} [{session_id}] skipped — '
@@ -471,7 +457,6 @@ def process_deck_session(session):
         f'session={session_seconds}s total={total_seconds}s'
     )
 
-    # Determine game type — appid < 0x80000000 is Steam Native
     try:
         game_type = 'Steam Native' if appid and int(appid) < 0x80000000 else 'Non-Steam'
     except (ValueError, TypeError):
@@ -613,19 +598,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 skipped += 1
                 continue
 
-            # Validate required fields for a closed session
             if session.get('end_playtime') is None or session.get('end_time') is None:
                 log.warning(f'Closed session {session_id} missing end data, skipping')
                 skipped += 1
                 continue
 
-            # Skip if already in-flight
             if is_in_flight(session_id):
                 log.info(f'Session {session_id} already in-flight, skipping duplicate')
                 skipped += 1
                 continue
 
-            # Mark in-flight and queue — process_deck_session handles ha_processed
             mark_in_flight(session_id)
             memory_queue.put({'_type': 'deck_session', 'session': session})
 
@@ -678,7 +660,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         Handles improperly closed sessions (properly_closed=False) from the
         HA game closed automation.
 
-        The automation now sends start_time sourced from the MQTT queue sensor
+        The automation sends start_time sourced from the MQTT queue sensor
         (the actual session start on the Deck), so we use that directly rather
         than relying on the potentially stale HA queue file entry's start_time.
         """
@@ -690,7 +672,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         game_name       = data['game_name']
         stop_time       = data['stop_time']
         properly_closed = data['properly_closed']
-        # start_time sent by automation from MQTT queue sensor
         start_time      = data.get('start_time', stop_time)
 
         with queue_file_lock:
@@ -701,7 +682,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         and e.get('game_name', '').lower() == game_name.lower()):
                     entries[i]['state']          = 'stop'
                     entries[i]['stop_time']       = stop_time
-                    entries[i]['start_time']      = start_time  # override with correct start
+                    entries[i]['start_time']      = start_time
                     entries[i]['properly_closed'] = properly_closed
                     matched = entries[i]
                     break
@@ -715,8 +696,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 )
                 self.send_json(200, {'status': 'ok', 'entry_id': matched['entry_id']})
             else:
-                # No matching start entry — create a minimal stop entry so the
-                # session is still recorded rather than silently lost.
                 log.warning(
                     f'No matching start entry for stop: {game_name} — '
                     f'creating minimal stop entry'

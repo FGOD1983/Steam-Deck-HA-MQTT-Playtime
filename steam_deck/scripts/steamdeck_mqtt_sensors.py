@@ -19,16 +19,22 @@ from urllib.parse import quote
 # Configuration
 # ===========================
 
-MQTT_HOST = "YOUR_HA_RUNNING_MQTT"
-MQTT_PORT = 8883
-MQTT_USER = "YOUR_MQTT_USER_FOR_HA"
-MQTT_PASS = "YOUR_MQTT_PASSWORD_FOR_HA"
-BASE_TOPIC = "steamdeck"
-CACHE_PATH = "/home/deck/scripts/game_cache.json"
-TRACE_LOG_PATH = "/home/deck/scripts/game_trace.log"
-STEAM_APPS_PATH = "/home/deck/.steam/steam/steamapps"
+MQTT_HOST        = "YOUR_HA_RUNNING_MQTT"
+MQTT_PORT        = 8883
+MQTT_USER        = "YOUR_MQTT_USER_FOR_HA"
+MQTT_PASS        = "YOUR_MQTT_PASSWORD_FOR_HA"
+BASE_TOPIC       = "steamdeck"
+CACHE_PATH       = "/home/deck/scripts/game_cache.json"
+TRACE_LOG_PATH   = "/home/deck/scripts/game_trace.log"
+STEAM_APPS_PATH  = "/home/deck/.steam/steam/steamapps"
 QUEUE_PATH       = "/home/deck/scripts/playtime_queue.json"
+LAST_RUN_PATH    = "/home/deck/scripts/last_run.json"
 STEAM_USER_PATH  = os.path.expanduser("~/.local/share/Steam/userdata")
+
+
+# Gap threshold in seconds — if the script hasn't run in this long,
+# the Deck was assumed to be in standby.
+GAP_THRESHOLD_SECONDS = 30
 
 os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
 
@@ -61,6 +67,78 @@ def get_output(cmd):
         return ""
 
 # ===========================
+# Last Run helpers
+# ===========================
+
+def load_last_run():
+    """
+    Load last_run.json.
+    Returns a list of run entries (most recent last).
+    When online, only the last entry matters.
+    When offline, entries accumulate until back online.
+    """
+    if not os.path.exists(LAST_RUN_PATH):
+        return []
+    try:
+        with open(LAST_RUN_PATH, "r") as f:
+            data = json.load(f)
+        # Support both single dict (legacy) and list format
+        if isinstance(data, dict):
+            return [data]
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print_log(f"last_run.json load error: {e}")
+        return []
+
+def get_last_run(runs):
+    """Return the most recent run entry, or empty dict if none."""
+    return runs[-1] if runs else {}
+
+def save_last_run(runs, online):
+    """
+    Save last_run.json.
+    If online: overwrite with just the current (last) entry — clean slate.
+    If offline: keep all accumulated offline entries.
+    """
+    tmp = LAST_RUN_PATH + ".tmp"
+    try:
+        data = [runs[-1]] if (online and runs) else runs
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, LAST_RUN_PATH)
+    except Exception as e:
+        print_log(f"last_run.json save error: {e}")
+
+def build_run_entry(timestamp, online, detected_game, detected_appid, detected_type,
+                    battery, charging, mode, network_name, is_docked, open_session):
+    """Build a full run entry dict for last_run.json."""
+    session_data = None
+    if open_session:
+        session_data = {
+            "session_id":     open_session.get("session_id"),
+            "game_state":     open_session.get("game_state"),
+            "start_time":     open_session.get("start_time"),
+            "end_time":       open_session.get("end_time"),
+            "start_playtime": open_session.get("start_playtime"),
+            "end_playtime":   open_session.get("end_playtime"),
+            "ha_processed":   open_session.get("ha_processed"),
+        }
+    return {
+        "timestamp":  timestamp,
+        "online":     online,
+        "game":       detected_game,
+        "appid":      detected_appid or "",
+        "game_type":  detected_type,
+        "session_id": open_session.get("session_id") if open_session else None,
+        "battery":    battery,
+        "charging":   charging,
+        "mode":       mode,
+        "network":    network_name,
+        "docked":     is_docked,
+        "session":    session_data,
+    }
+
+# ===========================
 # localconfig.vdf helpers
 # ===========================
 
@@ -76,8 +154,13 @@ def find_steam_user_id():
 def get_localconfig_playtime(appid):
     """
     Read the current total Playtime (minutes) for a given appid from localconfig.vdf.
-    appid can be a string in any format — we try signed int32 str (non-Steam)
-    and plain numeric str (Steam Native).
+
+    Non-Steam games can appear under both their unsigned uint32 key AND their
+    signed int32 key. Steam stores the actual playtime under the signed key.
+    We check both and return the one with the higher playtime value, since a
+    zero entry under the unsigned key should not override real data under the
+    signed key.
+
     Returns integer minutes, or 0 if not found.
     """
     uid = find_steam_user_id()
@@ -94,16 +177,36 @@ def get_localconfig_playtime(appid):
                    ["Valve"]
                    ["Steam"]
                    ["apps"])
-        # Try the appid as-is first, then as signed int32 string
-        entry = apps.get(str(appid))
-        if not entry and appid:
-            try:
-                signed = str(int(appid) if int(appid) < 2**31 else int(appid) - 2**32)
-                entry = apps.get(signed)
-            except:
-                pass
-        if entry:
-            return int(entry.get("Playtime", 0))
+
+        candidates = []
+
+        # Try unsigned key (as-is string)
+        entry_unsigned = apps.get(str(appid))
+        if entry_unsigned:
+            candidates.append(int(entry_unsigned.get("Playtime", 0)))
+
+        # Try signed int32 key
+        try:
+            raw = int(appid)
+            # Convert to signed int32 if needed
+            if raw >= 2**31:
+                signed_key = str(raw - 2**32)
+            elif raw < 0:
+                signed_key = str(raw)
+            else:
+                signed_key = None
+
+            if signed_key and signed_key != str(appid):
+                entry_signed = apps.get(signed_key)
+                if entry_signed:
+                    candidates.append(int(entry_signed.get("Playtime", 0)))
+        except (ValueError, TypeError):
+            pass
+
+        # Return the highest value found — real playtime beats a zero placeholder
+        if candidates:
+            return max(candidates)
+
     except Exception as e:
         print_log(f"localconfig.vdf read error: {e}")
     return 0
@@ -126,85 +229,134 @@ def load_queue():
         print_log(f"Queue load error: {e}")
         return {"active_sessions": []}
 
-def save_queue(queue):
+def save_queue(q):
     """Atomically write playtime_queue.json."""
     tmp = QUEUE_PATH + ".tmp"
     try:
         with open(tmp, "w") as f:
-            json.dump(queue, f, indent=2)
+            json.dump(q, f, indent=2)
         os.replace(tmp, QUEUE_PATH)
     except Exception as e:
         print_log(f"Queue save error: {e}")
 
-def get_open_session(queue):
+def get_open_session(q):
     """Return the first session with game_state == 'opened', or None."""
-    for s in queue["active_sessions"]:
+    for s in q["active_sessions"]:
         if s.get("game_state") == "opened":
             return s
     return None
 
-def open_session(queue, name, appid):
+def open_session(q, name, appid):
     """Add a new opened session to the queue."""
-    now         = int(time.time())
-    playtime    = get_localconfig_playtime(appid) if appid else 0
-    session = {
+    now      = int(time.time())
+    playtime = get_localconfig_playtime(appid) if appid else 0
+    session  = {
         "session_id":     str(now),
         "appid":          appid or "",
         "name":           name,
         "game_state":     "opened",
+        "ha_processed":   None,
         "start_playtime": playtime,
         "end_playtime":   None,
         "start_time":     now,
         "end_time":       None,
     }
-    queue["active_sessions"].append(session)
-    save_queue(queue)
+    q["active_sessions"].append(session)
+    save_queue(q)
     print_log(f"Queue: opened session for '{name}' (appid={appid}, start_playtime={playtime}m)")
     return session
 
-def close_session(queue, session):
-    """Mark a session as closed, read end_playtime from localconfig.vdf."""
-    now      = int(time.time())
+def close_session(q, session, ha_processed, end_time_override=None):
+    """
+    Mark a session as closed.
+
+    ha_processed: True only when gap detected + same game + last run was online
+                  (meaning HA already registered this session via standby detection).
+                  False in all other cases — let HA process it via normal flows.
+
+    end_time_override: use a specific end_time (last run timestamp for gap closes)
+                       instead of now.
+    end_playtime is read from localconfig.vdf at close time.
+    """
+    now      = end_time_override if end_time_override is not None else int(time.time())
     playtime = get_localconfig_playtime(session.get("appid")) if session.get("appid") else 0
     session["game_state"]   = "closed"
+    session["ha_processed"] = ha_processed
     session["end_time"]     = now
     session["end_playtime"] = playtime
-    save_queue(queue)
+    save_queue(q)
     print_log(
         f"Queue: closed session '{session['name']}' "
-        f"(end_playtime={playtime}m, duration={now - session['start_time']}s)"
+        f"(ha_processed={ha_processed}, end_playtime={playtime}m, "
+        f"end_time={now}, duration={now - session['start_time']}s)"
     )
 
-def remove_session(queue, session_id):
+def remove_session(q, session_id):
     """Remove a session from the queue by session_id."""
-    before = len(queue["active_sessions"])
-    queue["active_sessions"] = [
-        s for s in queue["active_sessions"]
+    before = len(q["active_sessions"])
+    q["active_sessions"] = [
+        s for s in q["active_sessions"]
         if s["session_id"] != session_id
     ]
-    after = len(queue["active_sessions"])
+    after = len(q["active_sessions"])
     if before != after:
-        save_queue(queue)
+        save_queue(q)
         print_log(f"Queue: removed session {session_id}")
 
-def update_queue_for_game(queue, detected_game, detected_appid):
+def update_queue_for_game(q, detected_game, detected_appid, last_run, online):
     """
     Compare detected game against the current open session.
-    - No game → close open session if any
-    - Same game as open session → no change
-    - Different game → close open session, open new one
-    - New game, nothing open → open new session
-    """
-    no_game     = (detected_game == "No game opened")
-    open_sess   = get_open_session(queue)
+    Uses last_run to detect standby gaps and set ha_processed correctly.
 
+    Gap detection: if time since last run > GAP_THRESHOLD_SECONDS, the Deck
+    was in standby. The open session is closed with end_time = last run timestamp.
+
+    ha_processed logic — only True in ONE case:
+      Gap detected + same game + last run was online
+      → HA saw the sensor go offline after 90s and already registered the session.
+
+    All other closes → ha_processed=False
+      → HA automations handle processing when they receive the queue data.
+    """
+    now          = int(time.time())
+    no_game      = (detected_game == "No game opened")
+    open_sess    = get_open_session(q)
+    last_ts      = last_run.get("timestamp", now)
+    last_game    = last_run.get("game", "No game opened")
+    last_online  = last_run.get("online", False)
+    gap_detected = (now - last_ts) > GAP_THRESHOLD_SECONDS
+
+    if gap_detected:
+        print_log(f"Gap detected: {now - last_ts}s since last run (threshold={GAP_THRESHOLD_SECONDS}s)")
+
+    # ── Gap detected with an open session ─────────────────────────────────────
+    if gap_detected and open_sess:
+        same_game = (open_sess["name"] == last_game)
+
+        # Only True if: gap + same game + last run was online
+        # In this case HA saw the sensor go offline and registered the session
+        ha_processed = (same_game and last_online)
+
+        print_log(
+            f"Gap close: '{open_sess['name']}' | same_game={same_game} | "
+            f"last_online={last_online} | ha_processed={ha_processed}"
+        )
+        # Close with end_time = last run timestamp (moment standby began)
+        close_session(q, open_sess, ha_processed=ha_processed, end_time_override=last_ts)
+
+        # If a different game is now detected, open a new session for it
+        if not no_game:
+            open_session(q, detected_game, detected_appid)
+        return
+
+    # ── No gap — normal flow ──────────────────────────────────────────────────
     if no_game:
         if open_sess:
             print_log(f"Queue: no game detected, closing '{open_sess['name']}'")
-            close_session(queue, open_sess)
+            # ha_processed=False — HA processes this via deck queue when it receives it
+            close_session(q, open_sess, ha_processed=False)
         return
 
-    # Game is running — check if it matches the open session
     if open_sess:
         if open_sess["name"] == detected_game:
             # Same game still running — nothing to do
@@ -212,10 +364,10 @@ def update_queue_for_game(queue, detected_game, detected_appid):
         else:
             # Game swap — close current, open new
             print_log(f"Queue: game swap '{open_sess['name']}' → '{detected_game}'")
-            close_session(queue, open_sess)
+            # ha_processed=False — deck queue handles this via end_playtime
+            close_session(q, open_sess, ha_processed=False)
 
-    # Open a new session
-    open_session(queue, detected_game, detected_appid)
+    open_session(q, detected_game, detected_appid)
 
 # ===========================
 # ACF Manifest Cache (Steam native games)
@@ -775,13 +927,12 @@ def is_network_online():
 # MQTT ACK handling
 # ===========================
 
-def process_acks(client, queue):
+def process_acks(client, q):
     """
     Read retained ACK messages from steamdeck/playtime/ack/#.
     For each ACK:
       - Remove the session from the local queue
       - Clear the retained ACK topic on MQTT
-    Returns the updated queue.
     """
     acked_session_ids = []
 
@@ -789,8 +940,7 @@ def process_acks(client, queue):
         topic   = msg.topic
         payload = msg.payload.decode("utf-8", errors="replace").strip()
         if not payload:
-            return  # already cleared, ignore
-        # Topic format: steamdeck/playtime/ack/<session_id>
+            return
         parts = topic.split("/")
         if len(parts) == 4 and parts[3]:
             session_id = parts[3]
@@ -800,14 +950,12 @@ def process_acks(client, queue):
     client.on_message = on_message
     client.subscribe(f"{BASE_TOPIC}/playtime/ack/#")
 
-    # Give retained messages a moment to arrive
     client.loop_start()
     time.sleep(0.5)
     client.loop_stop()
 
     for session_id in acked_session_ids:
-        remove_session(queue, session_id)
-        # Clear the retained ACK topic
+        remove_session(q, session_id)
         client.publish(
             f"{BASE_TOPIC}/playtime/ack/{session_id}",
             payload="",
@@ -815,7 +963,7 @@ def process_acks(client, queue):
         )
         print_log(f"Cleared ACK topic for session {session_id}")
 
-    return queue
+    return q
 
 # ===========================
 # MQTT & Run
@@ -823,16 +971,48 @@ def process_acks(client, queue):
 
 def run_update(offline_mode=False):
     print_log("--- Starting MQTT Update ---")
+    now    = int(time.time())
+    online = is_network_online()
+
     detected_game, detected_appid, detected_type = detect_game()
 
-    # Always update the local queue regardless of network state
-    queue = load_queue()
-    update_queue_for_game(queue, detected_game, detected_appid)
-    # Reload after potential saves inside update_queue_for_game
-    queue = load_queue()
+    # ── Load last run data ────────────────────────────────────────────────────
+    runs     = load_last_run()
+    last_run = get_last_run(runs)
 
-    if not is_network_online():
+    # ── Update local queue with gap detection and ha_processed logic ──────────
+    q = load_queue()
+    update_queue_for_game(q, detected_game, detected_appid, last_run, online)
+    q = load_queue()
+
+    # ── Collect sensor data (needed for last_run.json even when offline) ──────
+    eth_check    = get_output("nmcli -t -f TYPE,STATE dev | grep 'ethernet:connected'")
+    is_docked    = "Docked" if eth_check else "Undocked"
+    if eth_check:
+        network_name = "Ethernet"
+    else:
+        network_name = get_output("nmcli -t -f ACTIVE,SSID dev wifi | grep '^yes' | cut -d':' -f2")
+        if not network_name:
+            network_name = "Disconnected"
+    battery  = get_output(
+        "upower -i /org/freedesktop/UPower/devices/battery_BAT1 "
+        "| grep percentage | awk '{print $2}' | tr -d '%'"
+    ) or "0"
+    charging = get_output(
+        "upower -i /org/freedesktop/UPower/devices/battery_BAT1 "
+        "| grep state | awk '{print $2}'"
+    ).capitalize() or "Unknown"
+    mode = "Game Mode" if get_output("ps -A | grep gamescope") else "Desktop Mode"
+
+    if not online:
         print_log("Network offline. Skipping MQTT publish.")
+        open_sess = get_open_session(q)
+        run_entry = build_run_entry(
+            now, False, detected_game, detected_appid, detected_type,
+            battery, charging, mode, network_name, is_docked, open_sess
+        )
+        runs.append(run_entry)
+        save_last_run(runs, online=False)
         return
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -844,9 +1024,8 @@ def run_update(offline_mode=False):
         client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
 
         # ── Step 1: Process ACKs from HA ──────────────────────────────────────
-        queue = process_acks(client, queue)
-        # Reload after ACK removals
-        queue = load_queue()
+        q = process_acks(client, q)
+        q = load_queue()
 
         if offline_mode:
             client.loop_start()
@@ -857,28 +1036,7 @@ def run_update(offline_mode=False):
             write_trace("OFFLINE SIGNAL", "None", 0, "Status")
             return
 
-        # ── Step 2: Collect sensor data ───────────────────────────────────────
-        eth_check    = get_output("nmcli -t -f TYPE,STATE dev | grep 'ethernet:connected'")
-        is_docked    = "Docked" if eth_check else "Undocked"
-
-        if eth_check:
-            network_name = "Ethernet"
-        else:
-            network_name = get_output("nmcli -t -f ACTIVE,SSID dev wifi | grep '^yes' | cut -d':' -f2")
-            if not network_name:
-                network_name = "Disconnected"
-
-        battery = get_output(
-            "upower -i /org/freedesktop/UPower/devices/battery_BAT1 "
-            "| grep percentage | awk '{print $2}' | tr -d '%'"
-        ) or "0"
-        charging = get_output(
-            "upower -i /org/freedesktop/UPower/devices/battery_BAT1 "
-            "| grep state | awk '{print $2}'"
-        ).capitalize() or "Unknown"
-        mode = "Game Mode" if get_output("ps -A | grep gamescope") else "Desktop Mode"
-
-        # ── Step 3: Publish all sensors ───────────────────────────────────────
+        # ── Step 2: Publish all sensors ───────────────────────────────────────
         client.loop_start()
 
         client.publish(f"{BASE_TOPIC}/battery",      battery,       retain=True)
@@ -891,19 +1049,27 @@ def run_update(offline_mode=False):
         client.publish(f"{BASE_TOPIC}/appid",        detected_appid or "", retain=True)
         client.publish(f"{BASE_TOPIC}/availability", "online",      retain=True)
 
-        # ── Step 4: Publish playtime queue ────────────────────────────────────
-        queue_payload = json.dumps(queue, indent=2)
+        # ── Step 3: Publish playtime queue ────────────────────────────────────
+        queue_payload = json.dumps(q, indent=2)
         client.publish(f"{BASE_TOPIC}/playtime/queue", queue_payload, retain=True)
-        print_log(f"Queue published: {len(queue['active_sessions'])} session(s)")
+        print_log(f"Queue published: {len(q['active_sessions'])} session(s)")
 
         time.sleep(1)
         client.loop_stop()
         client.disconnect()
         print_log(f"Update successful: {detected_game} [{detected_type}] (appid={detected_appid})")
 
+        # ── Step 4: Save last run (online — overwrite with single entry) ──────
+        open_sess = get_open_session(q)
+        run_entry = build_run_entry(
+            now, True, detected_game, detected_appid, detected_type,
+            battery, charging, mode, network_name, is_docked, open_sess
+        )
+        runs.append(run_entry)
+        save_last_run(runs, online=True)
+
     except Exception as e:
         print_log(f"MQTT Error: {e}")
 
 if __name__ == "__main__":
     run_update(offline_mode="--offline" in sys.argv)
-

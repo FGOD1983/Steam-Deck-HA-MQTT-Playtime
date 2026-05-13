@@ -81,3 +81,11 @@
       payload_available: "online"
       payload_not_available: "offline"
       expire_after: 90 
+
+    - name: "Steam Deck Playtime Queue"
+      unique_id: "steam_deck_playtime_queue"
+      state_topic: "steamdeck/playtime/queue"
+      icon: "mdi:gamepad-variant"
+      value_template: "{{ value_json.active_sessions | length }} session(s)"
+      json_attributes_topic: "steamdeck/playtime/queue"
+      json_attributes_template: "{{ value }}"
