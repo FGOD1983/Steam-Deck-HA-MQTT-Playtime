@@ -1,6 +1,7 @@
 # Steam Deck
 
-  process_steam_queue: "curl -X POST -H \"Content-Type: application/json\" -d '{{ payload }}' http://127.0.0.1:8098/process_deck_queue"
+  process_steam_queue: >-
+    curl -X POST -H "Content-Type: application/json" -d "{{ payload | replace('"', '\\"') }}" http://127.0.0.1:8098/process_deck_queue
 
   update_steam_library: "/bin/bash -c 'echo \"{{ json_data }}\" | base64 -d > /config/www/steam_library.json'"
   
