@@ -378,8 +378,11 @@ def build_acf_cache():
     search_paths = [
         STEAM_APPS_PATH,
         "/run/media/mmcblk0p1/steamapps",
-        "/run/media/deck/steamapps",
     ]
+    
+    # Dynamically grab any external drives/SD cards mounted by SteamOS
+    search_paths.extend(glob.glob("/run/media/deck/*/steamapps"))
+    
     for base in search_paths:
         if not os.path.isdir(base):
             continue
@@ -722,24 +725,35 @@ def detect_game():
             reaper_match = re.search(r'reaper.*AppId=(\d+)', full_cmd, re.IGNORECASE)
             if reaper_match:
                 appid = reaper_match.group(1)
-                if appid in SHORTCUTS_CACHE:
-                    shortcut_name = SHORTCUTS_CACHE[appid].lower()
-                    if "exogui" not in shortcut_name and "exodos" not in shortcut_name:
-                        cache_data = {}
-                        if os.path.exists(CACHE_PATH):
-                            try:
-                                with open(CACHE_PATH, 'r') as f:
-                                    content_cache = f.read().strip()
-                                    if content_cache:
-                                        cache_data = json.loads(content_cache)
-                            except Exception as e:
-                                print_log(f"Cache read error (Reaper override): {e}")
+                is_native = is_steam_native_appid(appid)
+                
+                # Controleer of de game in een van de twee caches staat
+                if (is_native and appid in ACF_CACHE) or (not is_native and appid in SHORTCUTS_CACHE):
+                    cache_data = {}
+                    if os.path.exists(CACHE_PATH):
+                        try:
+                            with open(CACHE_PATH, 'r') as f:
+                                content_cache = f.read().strip()
+                                if content_cache:
+                                    cache_data = json.loads(content_cache)
+                        except Exception as e:
+                            print_log(f"Cache read error (Reaper override): {e}")
+
+                    # Bepaal de titel en het type op basis van het soort AppID
+                    if is_native:
+                        raw_title = cache_data.get(appid) or ACF_CACHE[appid]
+                        game_type = "Steam Native"
+                    else:
                         raw_title = cache_data.get(appid) or SHORTCUTS_CACHE[appid]
+                        game_type = "Non-Steam"
+                        
+                    # Extra check voor eXoDOS shortcuts
+                    if "exogui" not in raw_title.lower() and "exodos" not in raw_title.lower():
                         title = strip_emulator_suffix(raw_title)
                         possible_matches.append({
                             'title':     title,
                             'appid':     appid,
-                            'game_type': "Non-Steam",
+                            'game_type': game_type,
                             'resolved':  True,
                             'cpu':       proc.info['cpu_percent'],
                             'time':      proc.info['create_time'],
