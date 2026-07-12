@@ -378,6 +378,7 @@ def build_acf_cache():
     search_paths = [
         STEAM_APPS_PATH,
         "/run/media/mmcblk0p1/steamapps",
+        "/run/media/deck/steamapps",
     ]
     
     # Dynamically grab any external drives/SD cards mounted by SteamOS
