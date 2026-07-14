@@ -31,7 +31,6 @@ QUEUE_PATH       = "/home/deck/scripts/playtime_queue.json"
 LAST_RUN_PATH    = "/home/deck/scripts/last_run.json"
 STEAM_USER_PATH  = os.path.expanduser("~/.local/share/Steam/userdata")
 
-
 # Gap threshold in seconds — if the script hasn't run in this long,
 # the Deck was assumed to be in standby.
 GAP_THRESHOLD_SECONDS = 30
@@ -153,15 +152,8 @@ def find_steam_user_id():
 
 def get_localconfig_playtime(appid):
     """
-    Read the current total Playtime (minutes) for a given appid from localconfig.vdf.
-
-    Non-Steam games can appear under both their unsigned uint32 key AND their
-    signed int32 key. Steam stores the actual playtime under the signed key.
-    We check both and return the one with the higher playtime value, since a
-    zero entry under the unsigned key should not override real data under the
-    signed key.
-
-    Returns integer minutes, or 0 if not found.
+    Diagnostic version of get_localconfig_playtime to pinpoint the exact issue.
+    Logs directly to TRACE_LOG_PATH to provide 100% certainty.
     """
     uid = find_steam_user_id()
     if not uid:
@@ -169,46 +161,53 @@ def get_localconfig_playtime(appid):
     lc_path = os.path.join(STEAM_USER_PATH, uid, "config", "localconfig.vdf")
     if not os.path.exists(lc_path):
         return 0
-    try:
-        with open(lc_path, "r", encoding="utf-8") as f:
-            lc = vdf.loads(f.read())
-        apps = (lc["UserLocalConfigStore"]
-                   ["Software"]
-                   ["Valve"]
-                   ["Steam"]
-                   ["apps"])
 
-        candidates = []
-
-        # Try unsigned key (as-is string)
-        entry_unsigned = apps.get(str(appid))
-        if entry_unsigned:
-            candidates.append(int(entry_unsigned.get("Playtime", 0)))
-
-        # Try signed int32 key
+    # Helper to force writing directly to the log file so we don't miss it
+    def log_diag(msg):
         try:
-            raw = int(appid)
-            # Convert to signed int32 if needed
-            if raw >= 2**31:
-                signed_key = str(raw - 2**32)
-            elif raw < 0:
-                signed_key = str(raw)
-            else:
-                signed_key = None
-
-            if signed_key and signed_key != str(appid):
-                entry_signed = apps.get(signed_key)
-                if entry_signed:
-                    candidates.append(int(entry_signed.get("Playtime", 0)))
-        except (ValueError, TypeError):
+            with open(TRACE_LOG_PATH, "a") as f:
+                f.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | [DIAG] {msg}\n")
+        except:
             pass
 
-        # Return the highest value found — real playtime beats a zero placeholder
-        if candidates:
-            return max(candidates)
+    log_diag(f"--- Playtime lookup triggered for AppID: {appid} ---")
 
+    # TEST 1: Check for Unicode/Encoding issues (Oorzaak 1)
+    content = None
+    try:
+        with open(lc_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        log_diag("TEST 1 PASSED: File read successfully with strict UTF-8. No encoding issues.")
+    except UnicodeDecodeError as une:
+        log_diag(f"TEST 1 FAILED: UnicodeDecodeError triggered! Confirmed Oorzaak 1. Error: {une}")
+        # Fallback to replace so we can proceed with TEST 2
+        try:
+            with open(lc_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            log_diag(f"Critical error on fallback read: {e}")
+            return 0
     except Exception as e:
-        print_log(f"localconfig.vdf read error: {e}")
+        log_diag(f"Unexpected file read error: {e}")
+        return 0
+
+    # TEST 2: Check for Race Condition / Timing issues (Oorzaak 2)
+    try:
+        lc = vdf.loads(content)
+        apps = lc["UserLocalConfigStore"]["Software"]["Valve"]["Steam"]["apps"]
+        
+        entry = apps.get(str(appid))
+        if entry:
+            log_diag(f"TEST 2 RESULT: Found entry for AppID {appid}. Raw VDF data on disk RIGHT NOW: {json.dumps(entry)}")
+            return int(entry.get("Playtime", 0))
+        else:
+            log_diag(f"TEST 2 RESULT: AppID {appid} not found in VDF 'apps' list at this millisecond.")
+            # Check if any partial keys exist (like signed keys)
+            matching_keys = [k for k in apps.keys() if str(appid) in k or (hasattr(k, 'isdigit') and k.isdigit() and int(k) == int(appid))]
+            log_diag(f"Alternative matching keys found in VDF: {matching_keys}")
+    except Exception as e:
+        log_diag(f"Error parsing VDF structure during diagnosis: {e}")
+
     return 0
 
 # ===========================
@@ -269,16 +268,15 @@ def open_session(q, name, appid):
 def close_session(q, session, ha_processed, end_time_override=None):
     """
     Mark a session as closed.
-
-    ha_processed: True only when gap detected + same game + last run was online
-                  (meaning HA already registered this session via standby detection).
-                  False in all other cases — let HA process it via normal flows.
-
-    end_time_override: use a specific end_time (last run timestamp for gap closes)
-                       instead of now.
-    end_playtime is read from localconfig.vdf at close time.
     """
-    now      = end_time_override if end_time_override is not None else int(time.time())
+    now = end_time_override if end_time_override is not None else int(time.time())
+    
+    # --- FIX: Wait 3 seconds to let Steam flush localconfig.vdf to the SSD ---
+    if end_time_override is None: # Only sleep during a normal live close, not a gap recovery
+        print_log("Waiting 3 seconds for Steam to write playtime to disk...")
+        time.sleep(3)
+    # ------------------------------------------------------------------------
+
     playtime = get_localconfig_playtime(session.get("appid")) if session.get("appid") else 0
     session["game_state"]   = "closed"
     session["ha_processed"] = ha_processed
@@ -380,10 +378,10 @@ def build_acf_cache():
         "/run/media/mmcblk0p1/steamapps",
         "/run/media/deck/steamapps",
     ]
-    
+
     # Dynamically grab any external drives/SD cards mounted by SteamOS
     search_paths.extend(glob.glob("/run/media/deck/*/steamapps"))
-    
+
     for base in search_paths:
         if not os.path.isdir(base):
             continue
@@ -727,7 +725,7 @@ def detect_game():
             if reaper_match:
                 appid = reaper_match.group(1)
                 is_native = is_steam_native_appid(appid)
-                
+
                 # Controleer of de game in een van de twee caches staat
                 if (is_native and appid in ACF_CACHE) or (not is_native and appid in SHORTCUTS_CACHE):
                     cache_data = {}
@@ -747,7 +745,7 @@ def detect_game():
                     else:
                         raw_title = cache_data.get(appid) or SHORTCUTS_CACHE[appid]
                         game_type = "Non-Steam"
-                        
+
                     # Extra check voor eXoDOS shortcuts
                     if "exogui" not in raw_title.lower() and "exodos" not in raw_title.lower():
                         title = strip_emulator_suffix(raw_title)
