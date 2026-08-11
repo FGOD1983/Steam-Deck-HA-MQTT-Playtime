@@ -22,7 +22,7 @@ The system features a Smart Lookup engine that cleans up folder names and fetche
 **🔋 System Stats:** Monitors battery percentage, charging state, and SteamOS Mode (Game vs. Desktop).  
 **🔐 Reboot-Resilient:** Home Assistant logic ensures playtime is saved even if HA restarts mid-session.  
 **📡 Secure MQTT:** Supports TLS/SSL connections for remote tracking.  
-**🎨 Game Cover Art:** Automatically fetches game cover art from IGDB and displays it on your dashboard.  
+**🎨 Flexible Cover Art Options:** Choose between the legacy CDN/IGDB lookup or the official Home Assistant Steam Integration/IGDB lookup.
 **🔄 Auto Token Refresh:** IGDB Bearer token is automatically refreshed before it expires.  
 **🕹️ localconfig.vdf Playtime Sync:** Playtime for both Steam Native and Non-Steam games is read directly from Steam's local `localconfig.vdf` file — no API calls, no waiting, works offline and matches exactly what Steam displays in Game Mode.  
 **⚡ Queue-Based Processing:** A persistent Python service handles all playtime calculations in order, preventing data corruption when switching games rapidly.  
@@ -183,7 +183,9 @@ post_game_stop: >-
 
 Now let's do the same for the REST Sensor [REST Sensor](./home_assistant/sensors/sensors.yaml). Copy that code into your `sensors.yaml` file.
 
-And for the last sensors, you will need to copy the [`templates.yaml`](./home_assistant/sensors/templates.yaml) file content to your `templates.yaml` file on Home Assistant.
+And for the last sensors, you will need to copy the appropriate template file depending on your setup choice in Step 3:
+* **Legacy / Traditional setup:** Copy the content from [`templates_legacy.yaml`](./home_assistant/sensors/templates_legacy.yaml).
+* **Official Steam Integration setup:** Copy the content from [`templates_steam_integration.yaml`](./home_assistant/sensors/templates_steam_integration.yaml).
 
 ### 2.4 The Library Database (JSON)
 
@@ -289,12 +291,21 @@ If the Deck was offline when it went to standby, `ha_processed` is set to `false
 
 > ℹ️ The queue processor uses an in-memory set to track sessions currently being processed. If the same `session_id` arrives again while processing is still in progress it is silently skipped, preventing double-counting. On processor restart the in-memory set is cleared but the Deck will resend any unACK'd sessions on its next cycle.
 
-## 🎨 Step 3: IGDB Game Cover Art Setup
+## 🎨 Step 3: Game Cover Art & Integration Options (Choose One)
 
-To display game cover art on your dashboard, you need a free IGDB API account. IGDB is owned by Twitch, so authentication goes through the Twitch Developer portal.
+You can choose how you want to handle metadata and cover artwork for your Steam Deck setup:
 
-> ℹ️ **Cover art sources:** Steam Native games use Steam's own images fetched directly from the Steam CDN using the appid — the automation checks if a high quality capsule image (616x353) is available and falls back to the standard header image (460x215) if not. All other game types (ROMs, non-Steam, ExoDOS) use IGDB for cover art lookup by game name.
+### Option A: Traditional Custom Lookup & IGDB Method (Legacy)
+* **Approach:** Uses custom shell commands, REST queries, Twitch/IGDB API keys, and Steam CDN links to fetch artwork and titles for all games.
+* **Configuration & Dashboard Files:** 
+  * Dashboard: `home_assistant/dashboard/picture_card_desktop.yaml` & `home_assistant/dashboard/picture_card_mobile.yaml`
+  * Templates: `home_assistant/sensors/templates_legacy.yaml`
 
+### Option B: Official Home Assistant Steam Integration (Cover Art & Title Only)
+* **Approach:** Uses the official native Home Assistant Steam integration specifically for cover art and game titles on your dashboard picture cards for official Steam games. 
+* **Configuration & Dashboard Files:**
+  * Dashboard: `home_assistant/dashboard/picture_card_desktop_steam_integration.yaml` & `home_assistant/dashboard/picture_card_mobile_steam_integration.yaml`
+  * Templates: `home_assistant/sensors/templates_steam_integration.yaml`
 ### 3.1 Create a Twitch Developer Application
 
 1. Go to [https://dev.twitch.tv/console](https://dev.twitch.tv/console) and log in with your Twitch account (or create a free one if you don't have one).
