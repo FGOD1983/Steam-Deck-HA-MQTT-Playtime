@@ -293,7 +293,9 @@ If the Deck was offline when it went to standby, `ha_processed` is set to `false
 
 ## 🎨 Step 3: Game Cover Art & Integration Options (Choose One)
 
-You can choose how you want to handle metadata and cover artwork for your Steam Deck setup:
+To display game cover art on your dashboard, you need a free IGDB API account. IGDB is owned by Twitch, so authentication goes through the Twitch Developer portal.
+
+> ℹ️ **Cover art sources:** Depending on your choice you can use the combination of fetching your own capsule/header images from the Steam CDN for Steam Native games or use the images created by the Steam Integration (Option A or B below). All other game types (ROMs, Non-Steam, ExoDOS) will use IGDB for cover art lookup by game name.
 
 > ⚠️ **Important Note on Entity IDs:** Make sure to inspect the YAML code of the dashboard card you choose and update any placeholder entity IDs (specifically for the image sensors and media entities) to match your actual Home Assistant entity names.
 
@@ -308,6 +310,7 @@ You can choose how you want to handle metadata and cover artwork for your Steam 
 * **Configuration & Dashboard Files:**
   * Dashboard: `home_assistant/dashboard/picture_card_desktop_steam_integration.yaml` & `home_assistant/dashboard/picture_card_mobile_steam_integration.yaml`
   * Templates: `home_assistant/sensors/templates_steam_integration.yaml`
+
 ### 3.1 Create a Twitch Developer Application
 
 1. Go to [https://dev.twitch.tv/console](https://dev.twitch.tv/console) and log in with your Twitch account (or create a free one if you don't have one).
