@@ -295,6 +295,8 @@ If the Deck was offline when it went to standby, `ha_processed` is set to `false
 
 You can choose how you want to handle metadata and cover artwork for your Steam Deck setup:
 
+> ⚠️ **Important Note on Entity IDs:** Make sure to inspect the YAML code of the dashboard card you choose and update any placeholder entity IDs (specifically for the image sensors and media entities) to match your actual Home Assistant entity names.
+
 ### Option A: Traditional Custom Lookup & IGDB Method (Legacy)
 * **Approach:** Uses custom shell commands, REST queries, Twitch/IGDB API keys, and Steam CDN links to fetch artwork and titles for all games.
 * **Configuration & Dashboard Files:** 
