@@ -412,7 +412,12 @@ The dashboard card uses a custom Steam Deck icon set for the dock status. You ne
 
 The first card uses [`steamdeck.png`](./home_assistant/www/steamdeck.png) as the background image. Copy this file into your `/config/www/` folder alongside `steam_library.json`.
 
-When that is done you can go to your dashboard and create a new card with the [`picture_card.yaml`](./home_assistant/dashboard/picture_card.yaml) code.
+Depending on your device type and whether you use the official Steam integration, create a new card on your dashboard using the corresponding configuration file:
+
+* **Desktop (Legacy / Without Steam Integration):** [`picture_card_desktop.yaml`](./home_assistant/dashboard/picture_card_desktop.yaml)
+* **Desktop (With Official Steam Integration):** [`picture_card_desktop_steam_integration.yaml`](./home_assistant/dashboard/picture_card_desktop_steam_integration.yaml)
+* **Mobile (Legacy / Without Steam Integration):** [`picture_card_mobile.yaml`](./home_assistant/dashboard/picture_card_mobile.yaml)
+* **Mobile (With Official Steam Integration):** [`picture_card_mobile_steam_integration.yaml`](./home_assistant/dashboard/picture_card_mobile_steam_integration.yaml)
 
 The second card is a Markdown card which displays the top 5 most played games with their total playtime and the last 5 played games with their day and time they were last played.
 
