@@ -112,7 +112,7 @@
         {% else %}
           mdi:battery-remove-outline
         {% endif %}
-        
+
     # 🎮 Active Game Sensor
     - name: "Steam Deck Active Game Display"
       unique_id: steam_deck_active_game_display
@@ -190,36 +190,47 @@
           mdi:controller
         {% endif %}
         
+        
     - name: Steam Deck Cover URL
       unique_id: steam_deck_cover_url
       state: >
         {% set game_type = states('sensor.steam_deck_game_type') %}
         {% set appid = states('sensor.steam_deck_appid') %}
-        {% set igdb = states('input_text.steam_deck_game_cover_url') %}
+        {% set fallback_url = states('input_text.steam_deck_game_cover_url') %}
         {% set image_type = states('input_text.steam_pending_image_type') %}
-        {% if game_type == 'Steam Native' and appid not in ['', 'unknown', 'unavailable', 'none'] %}
-          {% if image_type == 'capsule' %}
-            https://cdn.cloudflare.steamstatic.com/steam/apps/{{ appid }}/capsule_616x353.jpg
-          {% else %}
-            https://cdn.cloudflare.steamstatic.com/steam/apps/{{ appid }}/header.jpg
-          {% endif %}
-        {% else %}
-          {{ igdb }}
-        {% endif %}
-
-    - name: Steam Deck Cover URL
-      unique_id: steam_deck_cover_url
-      state: >
-        {% set game_type = states('sensor.steam_deck_game_type') %}
-        {% set appid = states('sensor.steam_deck_appid') %}
-        {% set igdb = states('input_text.steam_deck_game_cover_url') %}
-        {% set image_type = states('input_text.steam_pending_image_type') %}
-        {% set steam_entity = 'image.YOUR_STEAM_USERNAME_main_capsule' if image_type == 'capsule' else 'image.YOUR_STEAM_USERNAME_header_capsule' %}
+        {% set steam_entity = 'image.f_god_main_capsule' if image_type == 'capsule' else 'image.f_god_header_capsule' %}
+        {% set steam_state = states(steam_entity) %}
         {% set steam_url = state_attr(steam_entity, 'entity_picture') %}
-        {% if game_type == 'Steam Native' and appid not in ['', 'unknown', 'unavailable', 'none'] and steam_url %}
+
+        {# Gebruik alleen de Steam-integratie entiteit als deze daadwerkelijk beschikbaar is EN een image proxy URL heeft #}
+        {% if game_type == 'Steam Native' 
+              and appid not in ['', 'unknown', 'unavailable', 'none'] 
+              and steam_state not in ['unavailable', 'unknown', 'none'] 
+              and steam_url %}
           {{ steam_url }}
         {% else %}
-          {{ igdb }}
+          {# Valt automatisch terug op de directe Cloudflare CDN link of IGDB URL uit de automatisering #}
+          {{ fallback_url }}
+        {% endif %}
+
+    - name: Steam Deck Logo URL
+      unique_id: steam_deck_logo_url
+      state: >
+        {% set game_type = states('sensor.steam_deck_game_type') %}
+        {% set appid = states('sensor.steam_deck_appid') %}
+        {% set logo_state = states('image.f_god_library_logo') %}
+        {% set logo_url = state_attr('image.f_god_library_logo', 'entity_picture') %}
+        
+        {% if game_type == 'Steam Native' and appid not in ['', 'unknown', 'unavailable', 'none'] %}
+          {# Als Steam integratie werkt, gebruik de entity_picture #}
+          {% if logo_state not in ['unavailable', 'unknown', 'none'] and logo_url %}
+            {{ logo_url }}
+          {# Als Steam integratie op unavailable staat, genereer de vaste CDN link #}
+          {% else %}
+            https://cdn.cloudflare.steamstatic.com/steam/apps/{{ appid }}/logo.png
+          {% endif %}
+        {% else %}
+          none
         {% endif %}
 
 - image:
@@ -233,8 +244,24 @@
         {% elif cover.startswith('http') %}
           {{ cover }}
         {% else %}
-          data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR42mNk+M8AAY0BAJ8f66oAAAAASUVORK5CYII=
-        % endif %}
+          data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR42mNk+M8AAY0BAJ8f66oAAAAASUVORUS5CYII=
+        {% endif %}
       {% else %}
-        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR42mNk+M8AAY0BAJ8f66oAAAAASUVORK5CYII=
+        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR42mNk+M8AAY0BAJ8f66oAAAAASUVORUS5CYII=
+      {% endif %}
+
+  - name: Steamdeck Active Game Logo
+    unique_id: steamdeck_active_game_logo
+    url: >
+      {% set logo = states('sensor.steam_deck_logo_url') %}
+      {% if logo not in ['none', 'unknown', 'unavailable', ''] %}
+        {% if logo.startswith('/') %}
+          http://127.0.0.1:8123{{ logo }}
+        {% elif logo.startswith('http') %}
+          {{ logo }}
+        {% else %}
+          data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR42mNk+M8AAY0BAJ8f66oAAAAASUVORUS5CYII=
+        {% endif %}
+      {% else %}
+        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR42mNk+M8AAY0BAJ8f66oAAAAASUVORUS5CYII=
       {% endif %}
