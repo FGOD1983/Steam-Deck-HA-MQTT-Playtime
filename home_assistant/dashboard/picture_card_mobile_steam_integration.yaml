@@ -18,7 +18,7 @@ cards:
                   left: 50%
                   width: 180px
                   height: 100px
-                  transform: translate(-50%, -50%)
+                  transform: translate(-50%, -42%)
                 card_mod:
                   style: |
                     hui-image {
@@ -214,37 +214,40 @@ cards:
                     - box-shadow: none
                     - padding: 0
                     - border-radius: 0
-              - type: state-icon
-                entity: sensor.steam_deck_active_game_display
-                style:
-                  top: 45%
-                  left: 50%
-                  transform: translate(-50%, -100%)
-                  filter: >-
-                    brightness(0) invert(1) opacity(0.6) drop-shadow(1px 1px 1px
-                    rgba(0,0,0,0.5))
               - type: conditional
                 conditions:
                   - entity: sensor.steam_deck_game_type
                     state: Steam Native
                 elements:
-                  - type: image
-                    entity: image.YOUR_STEAM_USERNAME_library_logo
+                  - type: state-icon
+                    entity: sensor.steam_deck_active_game_display
                     style:
-                      top: 62%
+                      top: 43%
                       left: 50%
-                      width: 100px
-                      height: 120px
-                      transform: translate(-50%, -50%)
+                      transform: translate(-50%, -100%)
+                      filter: >-
+                        brightness(0) invert(1) opacity(0.6) drop-shadow(1px 1px 1px
+                        rgba(0,0,0,0.5))
+                  - type: image
+                    entity: image.steamdeck_active_game_logo
+                    style:
+                      top: 65%
+                      left: 50%
+                      width: 80px
+                      height: 100px
+                      transform: translateX(-50%, -50%)
                       filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.8))
                       pointer-events: none
                 card_mod:
                   style: |
+                    hui-image {
+                      object-fit: contain !important;
+                    }
                     div {
                       white-space: unset !important;
                       line-height: 1.1;
                       padding-top: 0.3em;
-                        }
+                    }
               - type: conditional
                 conditions:
                   - entity: sensor.steam_deck_game_type
@@ -257,12 +260,12 @@ cards:
                       left: 50%
                       transform: translate(-50%, -100%)
                       filter: >-
-                        brightness(0) invert(1) opacity(0.6) drop-shadow(1px 1px
-                        1px rgba(0,0,0,0.5))
+                        brightness(0) invert(1) opacity(0.6) drop-shadow(1px 1px 1px
+                        rgba(0,0,0,0.5))
                   - type: state-label
                     entity: sensor.steam_deck_active_game_display
                     style:
-                      top: 39%
+                      top: 37%
                       left: 50%
                       transform: translate(-50%, -0%)
                       text-align: center
