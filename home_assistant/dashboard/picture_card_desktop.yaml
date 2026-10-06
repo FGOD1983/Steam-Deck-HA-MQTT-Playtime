@@ -16,9 +16,9 @@ cards:
                 style:
                   top: 43%
                   left: 50%
-                  width: 200px
-                  height: 120px
-                  transform: translate(-50%, -50%)
+                  width: 220px
+                  height: 140px
+                  transform: translate(-50%,-37%)
                 card_mod:
                   style: |
                     hui-image {
@@ -234,4 +234,3 @@ cards:
 visibility:
   - condition: screen
     media_query: (pointer:fine)
-
